@@ -11,6 +11,8 @@ data/**
 !data/*/.gitkeep
 !data/predictions/stub.json
 !data/predictions/contract.schema.json
+# ручные справочники (события и т.п.) — в git
+!data/reference/*.csv
 
 logs/
 catboost_info/

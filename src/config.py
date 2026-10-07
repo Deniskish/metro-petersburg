@@ -10,6 +10,9 @@ RAW = DATA / "raw"
 INTERIM = DATA / "interim"
 FEATURES = DATA / "features"
 PREDICTIONS = DATA / "predictions"
+REFERENCE = DATA / "reference"            # ручные справочники, в git
+EVENTS_MANUAL = REFERENCE / "events_manual.csv"
+FIGURES = ROOT / "reports" / "figures"
 
 # --- Период и время ---------------------------------------------------------
 # Все стыковки — по ts_utc; локальное время — только для календаря (раздел 3 ТЗ).
