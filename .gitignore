@@ -21,3 +21,7 @@ catboost_info/
 
 # обученные модели (models/lgbm_*/) — не в git, собираются командами src.model и src.serve
 models/
+
+# отчёт: страницы для просмотра и шаблон docx собираются build.sh
+docs/report/pages/
+docs/report/reference.docx
