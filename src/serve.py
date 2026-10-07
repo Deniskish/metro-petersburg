@@ -2,6 +2,8 @@
 
 Запуск:
   python -m src.serve --train                         # замороженная конфигурация на всех данных до 29.09 → models/lgbm_final/
+  python -m src.serve --train --holdout               # то же по 24.08 → models/lgbm_holdout/ (модель финального теста
+                                                      # без повторного теста: те же данные — те же деревья)
   python -m src.serve --now "2026-08-31 08:59"        # прогноз на t+1 и t+2 по данным до now
   python -m src.serve --now "2026-06-27 20:59" --model auto --json out.json
 
@@ -28,6 +30,7 @@ from src import features as F
 from src import model as M
 
 FULL = "lgbm_final"
+HOLDOUT = "lgbm_holdout"
 GAP = pd.Timedelta(days=BT.GAP_DAYS)
 WARNING = "модель видела этот период: прогноз не вне выборки"
 
@@ -153,13 +156,15 @@ def _header(fc: Forecast) -> str:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--train", action="store_true", help="обучить финальную модель на всех данных до 29.09")
+    ap.add_argument("--holdout", action="store_true", help="с --train: обучение по 24.08 → models/lgbm_holdout/")
     ap.add_argument("--now", help="момент прогноза, местное время: «2026-08-31 08:59»")
     ap.add_argument("--model", default="auto", help="auto (по умолчанию) или имя папки в models/")
     ap.add_argument("--stations", help="станции через запятую (для печати)")
     ap.add_argument("--json", help="записать записи, причины и meta в файл")
     args = ap.parse_args(argv)
     if args.train:
-        path = train_full()
+        last = BT.get_fold("final", final=True).train_end - pd.Timedelta(days=1)
+        path = train_full(end=last, name=HOLDOUT) if args.holdout else train_full()
         meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
         print(f"{path.relative_to(config.ROOT)}: обучение {meta['train_start']} – {meta['train_end']}, "
               f"деревьев {meta['best_iter']}")

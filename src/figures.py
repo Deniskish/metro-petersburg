@@ -53,11 +53,15 @@ def ladder(path=config.FIGURES / "spb_14_wape_ladder.png") -> pd.DataFrame:
             if not np.isnan(v):
                 ax.text(v + 0.12, yy, f"{v:.2f} %".replace(".", ","), va="center", fontsize=10, color=eda.INK2)
     ax.set_yticks(y, df.label)
+    for yy, (b_, s_) in zip(y, df[["back", "sep"]].to_numpy()):
+        if np.isnan(s_) and not np.isnan(b_):
+            ax.text(0.15, yy - hgt / 2, "в сентябре не запускалась (заморожена только финальная)", va="center",
+                    fontsize=10, color=eda.MUTED)
     for t, m in zip(ax.get_yticklabels(), df.model):
         if m == "lgbm_final":
             t.set_fontweight("bold")
     ax.grid(axis="y", visible=False)
-    ax.set_xlim(0, np.nanmax(df[["back", "sep"]].to_numpy()) * 100 * 1.15)
+    ax.set_xlim(0, np.nanmax(df[["back", "sep"]].to_numpy()) * 100 * 1.32)
     ax.set_xlabel("WAPE, все часы 05–00, среднее по горизонтам t+1 и t+2, %")
     ax.set_title("Лестница моделей: от сезонного наивного к LightGBM", loc="left")
     ax.legend(loc="lower right")
@@ -94,7 +98,7 @@ def demo_0831(path=config.FIGURES / "spb_15_demo_0831.png") -> pd.DataFrame:
         bb = base[(base.horizon_min == h) & base.ts.isin(hours)].set_index("ts").reindex(hours)
         x = np.array([t.hour for t in hours])
         ax.axvspan(7 + 50 / 60, 10 + 31 / 60, color=SPAN, zorder=0)
-        ax.text(7 + 50 / 60 + 0.08, 0.97, "инцидент\n07:50–10:31", transform=ax.get_xaxis_transform(), va="top",
+        ax.text(7 + 50 / 60 + 0.08, 0.03, "инцидент\n07:50–10:31", transform=ax.get_xaxis_transform(), va="bottom",
                 fontsize=10, color=eda.INK2)
         ax.fill_between(x, mm.q10, mm.q90, color=BLUE, alpha=0.12, linewidth=0, label="модель, q10–q90")
         ax.plot(x, mm.baseline, color=NORM, linewidth=1.2, label="норма b")
@@ -103,8 +107,7 @@ def demo_0831(path=config.FIGURES / "spb_15_demo_0831.png") -> pd.DataFrame:
         ax.plot(x, fact.reindex(hours).to_numpy(), color=FACT, marker="o", markersize=6, label="факт")
         ax.set_xticks(x, [f"{v:02d}" for v in x])
         ax.set_xlabel("час 31.08 (слот прогноза)")
-        ax.set_title(f"прогноз за {h // 60} ч" + (" (сделан в конце часа t)" if h == 60 else " (сделан на час раньше)"),
-                     loc="left", fontsize=13)
+        ax.set_title(f"горизонт {h} мин (t+{h // 60})", loc="left", fontsize=13)
         ax.yaxis.set_major_formatter(lambda v, _: f"{v:,.0f}".replace(",", " "))
         rows.append(pd.DataFrame({"hour": x, "h": h // 60, "fact": fact.reindex(hours).to_numpy(),
                                   "norm": mm.baseline.to_numpy(), "baseline_q50": bb.q50.to_numpy(),
@@ -116,8 +119,9 @@ def demo_0831(path=config.FIGURES / "spb_15_demo_0831.png") -> pd.DataFrame:
                                        "норма b")]
     fig.legend([handles[i] for i in order], [labels[i] for i in order], loc="lower center", ncol=5, frameon=False,
                bbox_to_anchor=(0.5, -0.04))
-    fig.suptitle("Демо-кейс 31.08: провал из-за инцидента и откат спроса, Девяткино", x=0.01, ha="left",
-                 fontweight="bold", fontsize=15)
+    fig.suptitle("Демо-кейс 31.08: провал из-за инцидента и откат спроса, Девяткино\n"
+                 "прогнозы model_aug.json и baseline_aug.json: обучение до 24.07, вне выборки", x=0.01, ha="left",
+                 fontweight="bold", fontsize=14)
     fig.tight_layout(rect=(0, 0.06, 1, 1))
     fig.savefig(path)
     plt.close(fig)
