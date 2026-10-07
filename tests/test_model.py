@@ -29,7 +29,10 @@ def _synthetic(days: int = 120, seed: int = 0) -> pd.DataFrame:
     df["band"] = df.hour.map(BT.BAND_OF)
     df["tau"] = (df.sday + pd.to_timedelta(df.hour, unit="h")).dt.tz_localize("UTC")
     df["station_id"], df["group"] = df.vestibule_id, "g"
-    df["is_special"] = df["is_anomaly"] = df["is_holiday"] = False
+    df["is_special"] = df["is_holiday"] = False
+    df["r_level_t"] = df.r_t                                      # вход бейзлайна «b × уровень × r(t)»
+    df["ewm_r_line_2h"] = df.groupby("sday").r_t.transform("mean")
+    df["is_anomaly"] = (df.y / df.b4_level - 1).abs() > 0.15
     return df
 
 
@@ -63,9 +66,10 @@ def test_windows_inside_train(fitted):
     assert last < fold.test_start - pd.Timedelta(days=BT.GAP_DAYS - 1)
     assert pd.Timestamp(m.info["calib_start"]) == last - pd.Timedelta(days=27)
     assert pd.Timestamp(m.info["es_start"]) == last - pd.Timedelta(days=13)
-    cal = train.loc[m.calib_q50.index]
+    cal = train.loc[m.calib_pred.index]
     assert cal.sday.min() == pd.Timestamp(m.info["calib_start"]) and cal.sday.max() == last
-    assert set(m.calib_q50.index) <= set(train.index)
+    assert set(m.calib_pred.index) <= set(train.index)
+    assert (m.calib_pred.q10 <= m.calib_pred.q50).all() and (m.calib_pred.q50 <= m.calib_pred.q90).all()
 
 
 def test_calibration_does_not_use_test(fitted):
@@ -129,3 +133,81 @@ def test_model_export_passes_contract():
     assert {p.model_version for p in preds} == {M.MODEL_VERSION}
     expl = json.loads(M.EXPLAIN_OUT.read_text(encoding="utf-8"))
     assert len(expl) == len(preds) and all(len(e["reasons"]) == 3 for e in expl)
+
+
+# --- Смесь, заморозка, флаг, бандл (этап 5) ----------------------------------------
+def _blend(**kw) -> M.BlendModel:
+    return M.BlendModel("blend", "blend", _model(), **kw)
+
+
+def test_blend_without_candidates_is_the_model(fitted):
+    _, _, train, test, _ = fitted
+    b = _blend(grid_a=()).fit(train)
+    assert b.a == 0 and b.w_max == 0
+    pd.testing.assert_frame_equal(b.predict(test), b.model.predict(test))
+
+
+def test_blend_weights_bounded(fitted):
+    _, _, train, test, _ = fitted
+    b = _blend().fit(train)
+    b.a, b.w_max = 5.0, 0.4
+    w = b.weights(test)
+    assert (w >= 0).all() and (w <= 0.4).all() and (w > 0).any()
+    p = b.predict(test)
+    assert (p.q10 <= p.q50).all() and (p.q50 <= p.q90).all()
+
+
+def test_blend_tuning_does_not_use_test(fitted):
+    df, fold, *_ = fitted
+    is_test = (df.sday >= fold.test_start) & (df.sday <= fold.test_end)
+    seen = []
+    keep = lambda f, mm: seen.append(mm)
+    base = BT.run(df, [_blend()], [fold], on_fit=keep)
+    noisy = df.assign(y=np.where(is_test, np.random.default_rng(7).integers(0, 50_000, len(df)), df.y),
+                      is_anomaly=np.where(is_test, ~df.is_anomaly, df.is_anomaly))
+    alt = BT.run(noisy, [_blend()], [fold], on_fit=keep)
+    pd.testing.assert_frame_equal(base[["q10", "q50", "q90"]], alt[["q10", "q50", "q90"]])
+    assert (seen[0].a, seen[0].w_max) == (seen[1].a, seen[1].w_max)
+
+
+def test_check_frozen_detects_changes():
+    cfg = {"features": FEATS, "target": "ratio", "anomaly_rule": {"kind": "interval"}, "blend": {"accepted": False}}
+    cfg = {**cfg, "config_sha256": M.config_hash(cfg), "code_sha256": M.code_hashes(), "frozen": True}
+    M.check_frozen(cfg)
+    with pytest.raises(SystemExit):
+        M.check_frozen({**cfg, "features": FEATS[:-1]})                 # конфигурацию поправили после заморозки
+    with pytest.raises(SystemExit):
+        M.check_frozen({**cfg, "code_sha256": {**cfg["code_sha256"], "src/model.py": "0" * 64}})   # код изменился
+    with pytest.raises(SystemExit):
+        M.check_frozen({k: v for k, v in cfg.items() if k != "frozen"})
+
+
+def test_final_config_hash_matches():
+    if not M.FINAL_JSON.exists():
+        pytest.skip("нет model_final.json")
+    cfg = json.loads(M.FINAL_JSON.read_text(encoding="utf-8"))
+    if not cfg.get("frozen"):
+        pytest.skip("конфигурация ещё не заморожена")
+    assert M.config_hash(cfg) == cfg["config_sha256"]
+
+
+def test_flag_metrics_toy():
+    r = M._prf(np.array([True, True, False, False]), np.array([True, False, True, False]))
+    assert r["precision"] == 0.5 and r["recall"] == 0.5 and r["f1"] == pytest.approx(0.5)
+    t = pd.DataFrame({"model": "модель", "level": "вестибюли", "h": "оба", "rule": list(M.FLAG_RULES),
+                      "precision": [0.2, 0.3, 0.5, 0.4], "recall": [0.9, 0.7, 0.3, 0.65], "f1": [0.3, 0.4, 0.45, 0.5]})
+    assert M.choose_flag_rule(t, "модель")[0] == "норма вне [q10; q90]"   # recall ≥ 0,6 и лучшая precision
+    low = t.assign(recall=0.5)
+    assert M.choose_flag_rule(low, "модель")[0] == "норма вне [q10; q90]"  # иначе — лучший F1
+
+
+def test_bundle_roundtrip(fitted, tmp_path):
+    _, _, train, test, m = fitted
+    st_q = BT.RatioQuantiles("station", "s", lambda df: df.f).fit(train.assign(f=train.b4_level))
+    cfg = {"anomaly_rule": {"kind": "threshold", "level": "p90"}, "thresholds": None, "config_sha256": "x"}
+    M.save_bundle(tmp_path / "b", m, st_q, cfg, train, "b")
+    m2, st_q2, meta = M.load_bundle(tmp_path / "b")
+    pd.testing.assert_frame_equal(m.predict(test), m2.predict(test))
+    st = test.assign(f=test.b4_level)
+    pd.testing.assert_frame_equal(st_q.predict(st), st_q2.predict(st), check_names=False)
+    assert meta["train_end"] == str(train.sday.max().date()) and meta["anomaly_rule"]["level"] == "p90"

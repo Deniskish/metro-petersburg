@@ -98,11 +98,25 @@ def build_panel(d: E.SpbData, final: bool = False) -> Panel:
                  ewm2_in=E.ewm_ratio(r_in, g.ts, 2), thresholds=nt, final=final)
 
 
-def anomaly_threshold(panel: Panel, group: pd.Series, hour: pd.Series) -> np.ndarray:
-    """p95 |r − 1| группы и периода суток (EDA); для 05–06 — по всем часам группы."""
-    t = panel.thresholds.set_index(["level", "band"]).p95
+def anomaly_threshold(panel: Panel, group: pd.Series, hour: pd.Series, level: str = "p95") -> np.ndarray:
+    """Квантиль `level` (p80 / p90 / p95) |r − 1| группы и периода суток (EDA); для 05–06 — по всем часам группы."""
+    t = panel.thresholds.set_index(["level", "band"])[level]
     band = hour.map(EDA_BAND_OF).fillna("все часы")
     return t.reindex(pd.MultiIndex.from_arrays([group.to_numpy(), band.to_numpy()])).to_numpy()
+
+
+DEFAULT_FLAG_RULE = {"kind": "threshold", "level": "p95"}
+
+
+def anomaly_flag(df: pd.DataFrame, panel: Panel, rule: dict | None = None) -> np.ndarray:
+    """Флаг аномалии прогноза. df — q10, q50, q90, норма b, group, hour.
+    threshold: |q50 / b − 1| выше квантиля rule["level"] группы и периода; interval: норма вне [q10; q90]."""
+    rule = rule or DEFAULT_FLAG_RULE
+    if rule["kind"] == "interval":
+        return ((df.b < df.q10) | (df.b > df.q90)).to_numpy()
+    thr = anomaly_threshold(panel, df.group, df.hour, rule["level"])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return ((df.q50 / df.b - 1).abs() > thr).to_numpy()
 
 
 def make_rows(panel: Panel, horizons=HORIZONS, for_export: bool = False) -> pd.DataFrame:
@@ -320,12 +334,10 @@ def export_august(panel: Panel, model_name: str) -> list[dict]:
     return station_records(st_test.join(q), panel, f"baseline_{model_name}_v1")
 
 
-def station_records(st: pd.DataFrame, panel: Panel, model_version: str) -> list[dict]:
-    """Записи контракта из станционной таблицы с q10, q50, q90; is_anomaly — |q50 / норма − 1| выше p95 группы
-    и периода суток."""
-    thr = anomaly_threshold(panel, st.group, st.hour)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        anomaly = (st.q50 / st.b - 1).abs() > thr
+def station_records(st: pd.DataFrame, panel: Panel, model_version: str, rule: dict | None = None) -> list[dict]:
+    """Записи контракта из станционной таблицы с q10, q50, q90; is_anomaly — по правилу `anomaly_flag`
+    (по умолчанию |q50 / норма − 1| выше p95 группы и периода суток)."""
+    anomaly = anomaly_flag(st, panel, rule)
     records = []
     for r, an in zip(st.itertuples(), anomaly):
         qs = sorted(round(x) for x in (r.q10, r.q50, r.q90))

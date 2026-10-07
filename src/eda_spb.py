@@ -788,7 +788,7 @@ def sync(d: SpbData) -> dict:
 
 # --- 10. Шум ------------------------------------------------------------------------
 def noise_table(d: SpbData) -> pd.DataFrame:
-    """|r − 1| на обычных днях, взвешено по потоку: p50 / p80 / p95 по группам и периодам суток."""
+    """|r − 1| на обычных днях, взвешено по потоку: p50 / p80 / p90 / p95 по группам и периодам суток."""
     df = d.df[d.df.is_regular & d.df.r.notna() & (d.df.sday >= ANALYSIS_START)]
     df = df.assign(dev=(df.r - 1).abs())
     rows = []
@@ -797,7 +797,7 @@ def noise_table(d: SpbData) -> pd.DataFrame:
     for gname, gd in groups:
         for band, hrs in bands:
             x = gd[gd.hour.isin(hrs)]
-            q = {f"p{int(p * 100)}": eda.weighted_quantile(x.dev, x.y, p) for p in (0.5, 0.8, 0.95)}
+            q = {f"p{int(p * 100)}": eda.weighted_quantile(x.dev, x.y, p) for p in (0.5, 0.8, 0.9, 0.95)}
             rows.append({"level": gname, "band": band, **q, "p80_unweighted": x.dev.quantile(0.8), "n": len(x)})
     return pd.DataFrame(rows)
 
