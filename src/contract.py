@@ -1,6 +1,7 @@
 """Контракт выхода модели (раздел 1 ТЗ): схема, валидация и JSON-заглушка для команды.
 
 Запуск: python -m src.contract — пишет data/predictions/stub.json и contract.schema.json.
+Схема допускает слоты по 15 минут и горизонты 15–120 мин; модель для СПб отдаёт часовые слоты и горизонты 60/120.
 """
 import json
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ import numpy as np
 from pydantic import (AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, StrictInt,
                       ValidationError, field_validator, model_validator)
 
-from src import config
+from src import config, reference
 
 NonNeg = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
@@ -98,18 +99,25 @@ def json_schema() -> dict:
 
 # --- Заглушка ---------------------------------------------------------------
 STUB_DAY = datetime(2026, 11, 12)          # четверг: будний двухпиковый профиль
-STUB_HORIZONS = (15, 30, 60, 120)
+STUB_N_SLOTS = 20                          # часы работы метро 05:00 … 00:00 (последний — уже 13 ноября)
+STUB_HORIZONS = (60, 120)
 STUB_EVENT = {"stations": ("vosstaniya", "chernyshevskaya", "vladimirskaya"),
               "start": "18:00", "end": "20:45", "mult": 1.4}
 
 
+def stub_stations() -> list[str]:
+    """Станции, по которым модель будет отдавать прогноз: из справочника, только с данными (has_data)."""
+    st = reference.load_stations()
+    return st.loc[st.has_data, "station_id"].tolist()
+
+
 def make_stub(seed: int = 42) -> list[dict]:
-    """Синтетический будний день 1 линии СПб; вечером «событие» у трёх станций."""
+    """Синтетический будний день 1 линии СПб по часам; вечером «событие» у трёх станций."""
     rng = np.random.default_rng(seed)
     tz = ZoneInfo(config.SPB_TZ)
-    start = STUB_DAY.replace(hour=6, tzinfo=tz)
-    slots = [start + timedelta(minutes=15 * k) for k in range(72)]  # 06:00–23:45
-    hours = np.array([s.hour + s.minute / 60 for s in slots])
+    start = STUB_DAY.replace(hour=config.SPB_SERVICE_DAY_START, tzinfo=tz)
+    slots = [start + timedelta(hours=k) for k in range(STUB_N_SLOTS)]
+    hours = config.SPB_SERVICE_DAY_START + np.arange(STUB_N_SLOTS)  # 5…24: полночь — продолжение суток
 
     # двугорбый суточный профиль: утренний пик сильнее вечернего
     profile = (0.15 + 1.0 * np.exp(-((hours - 8.5) / 1.0) ** 2 / 2)
@@ -118,7 +126,7 @@ def make_stub(seed: int = 42) -> list[dict]:
 
     ev_start, ev_end = (datetime.strptime(STUB_EVENT[k], "%H:%M").time() for k in ("start", "end"))
     records = []
-    for station in config.SPB_LINE1_STATIONS:
+    for station in stub_stations():
         volume = rng.uniform(15_000, 60_000)  # входов за день
         for slot, share in zip(slots, profile):
             baseline = volume * share
@@ -136,7 +144,7 @@ def make_stub(seed: int = 42) -> list[dict]:
                     "q90": round(q50 * (1 + rel)),
                     "baseline": round(baseline),
                     "is_anomaly": event,
-                    "model_version": "stub_v0",
+                    "model_version": "stub_v1",
                 })
     return records
 

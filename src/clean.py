@@ -49,9 +49,10 @@ def localize_mta(raw: pd.DataFrame, tz: str = config.TZ_LOCAL) -> pd.DataFrame:
     })
 
 
-def build_grid(station_ids: list[str], start_utc: pd.Timestamp, end_utc: pd.Timestamp) -> pd.DataFrame:
-    ts = pd.date_range(start_utc, end_utc, freq="h", tz="UTC")
-    idx = pd.MultiIndex.from_product([sorted(station_ids), ts], names=["station_id", "ts_utc"])
+def build_grid(station_ids: list[str], start_utc: pd.Timestamp, end_utc: pd.Timestamp,
+               freq: str = "h", id_col: str = "station_id") -> pd.DataFrame:
+    ts = pd.date_range(start_utc, end_utc, freq=freq, tz="UTC")
+    idx = pd.MultiIndex.from_product([sorted(station_ids), ts], names=[id_col, "ts_utc"])
     return idx.to_frame(index=False)
 
 

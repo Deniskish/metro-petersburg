@@ -1,6 +1,6 @@
 """Загрузка сырых данных в data/raw — как есть, без правок.
 
-Запуск: python -m src.download [--only complexes mta weather mets holidays] [--force]
+Запуск: python -m src.download [--only complexes mta weather mets holidays weather_spb calendar] [--force]
 Повторный запуск ничего не качает, если файл уже есть; --force перекачивает.
 """
 import argparse
@@ -18,7 +18,7 @@ from urllib3.util.retry import Retry
 
 from src import config
 
-STEPS = ["complexes", "mta", "weather", "mets", "holidays"]
+STEPS = ["complexes", "mta", "weather", "mets", "holidays", "weather_spb", "calendar"]
 
 
 # --- Общие помощники --------------------------------------------------------
@@ -158,19 +158,19 @@ def fetch_mta_hourly(session: requests.Session, force: bool = False) -> int:
 
 
 # --- Погода -----------------------------------------------------------------
-def fetch_weather(session: requests.Session, kind: str, force: bool = False) -> Path:
+def fetch_weather(session: requests.Session, kind: str, place: str = "queens", force: bool = False) -> Path:
     """Open-Meteo почасово в GMT/unixtime: локальные метки Open-Meteo в дни перехода на летнее время неверны.
 
     kind: "archive" — фактическая погода; "hist_forecast" — что обещал прогноз (честный признак).
-    end_date в UTC = 2025-01-01: последний местный час 2024-12-31 23:00 EST = 04:00Z; лишнее отрежет clean.
+    place: ключ config.WEATHER_PLACES. Даты в GMT покрывают весь период в UTC; лишнее отрежет clean
+    (Квинс: последний местный час 2024-12-31 23:00 EST = 04:00Z 1 января; СПб: 00:00 MSK 1 января = 21:00Z 31 декабря).
     """
-    path = config.RAW / f"weather_{kind}_queens.json"
+    path = config.RAW / f"weather_{kind}_{place}.json"
     if _skip(path, force):
         return path
-    lat, lon = config.QUEENS
+    (lat, lon), start, end = config.WEATHER_PLACES[place]
     data = _get_json(session, config.WEATHER_URLS[kind], {
-        "latitude": lat, "longitude": lon,
-        "start_date": f"{config.START_UTC:%Y-%m-%d}", "end_date": f"{config.END_UTC:%Y-%m-%d}",
+        "latitude": lat, "longitude": lon, "start_date": start, "end_date": end,
         "hourly": ",".join(config.WEATHER_VARS),
         "timezone": "GMT", "timeformat": "unixtime",
     })
@@ -214,6 +214,34 @@ def build_holidays(force: bool = False) -> Path:
     return path
 
 
+# --- Производственный календарь РФ ----------------------------------------
+def fetch_isdayoff(session: requests.Session, year: int = config.CALENDAR_YEAR, force: bool = False) -> Path:
+    """Тип каждого дня года с переносами выходных: 0 — рабочий, 1 — нерабочий, 2 — сокращённый (pre=1)."""
+    path = config.RAW / f"calendar_ru_{year}_isdayoff.txt"
+    if _skip(path, force):
+        return path
+    r = session.get(config.ISDAYOFF_URL, params={"year": year, "cc": "ru", "pre": 1}, timeout=60)
+    r.raise_for_status()
+    codes = r.text.strip()
+    n_days = 366 if pd.Timestamp(year=year, month=1, day=1).is_leap_year else 365
+    if len(codes) != n_days or set(codes) - set("012"):
+        raise RuntimeError(f"isdayoff: ожидалась строка из {n_days} цифр 0/1/2, получено {codes[:50]!r}")
+    _write_atomic(path, lambda p: p.write_text(codes + "\n", encoding="utf-8"))
+    print(f"  saved  {_rel(path)}  {len(codes)} дней, нерабочих {codes.count('1')}, сокращённых {codes.count('2')}")
+    return path
+
+
+def build_holidays_ru(year: int = config.CALENDAR_YEAR, force: bool = False) -> Path:
+    """Названия праздников РФ (holidays.RU): переносов там нет, их даёт isdayoff."""
+    path = config.RAW / f"holidays_ru_{year}.csv"
+    if _skip(path, force):
+        return path
+    df = pd.DataFrame(sorted(holidays.RU(years=year).items()), columns=["date", "name"])
+    _write_atomic(path, lambda p: df.to_csv(p, index=False))
+    print(f"  saved  {_rel(path)}  {len(df)} строк")
+    return path
+
+
 # --- main -------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -232,7 +260,7 @@ def main(argv: list[str] | None = None) -> None:
     if "weather" in args.only:
         print("[weather] Open-Meteo, Квинс")
         for kind in config.WEATHER_URLS:
-            fetch_weather(session, kind, args.force)
+            fetch_weather(session, kind, "queens", args.force)
     if "mets" in args.only:
         print("[mets] MLB Stats API")
         for season in config.MLB_SEASONS:
@@ -240,6 +268,14 @@ def main(argv: list[str] | None = None) -> None:
     if "holidays" in args.only:
         print("[holidays] библиотека holidays")
         build_holidays(args.force)
+    if "weather_spb" in args.only:
+        print("[weather_spb] Open-Meteo, Санкт-Петербург")
+        for kind in config.WEATHER_URLS:
+            fetch_weather(session, kind, "spb", args.force)
+    if "calendar" in args.only:
+        print(f"[calendar] производственный календарь РФ {config.CALENDAR_YEAR}: isdayoff.ru и holidays.RU")
+        fetch_isdayoff(session, force=args.force)
+        build_holidays_ru(force=args.force)
     print("download: готово")
 
 

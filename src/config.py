@@ -68,6 +68,8 @@ WEATHER_URLS = {
     "archive": "https://archive-api.open-meteo.com/v1/archive",
     "hist_forecast": "https://historical-forecast-api.open-meteo.com/v1/forecast",
 }
+# место → (координаты, start_date, end_date в GMT); точки СПб заданы ниже, в блоке СПб
+WEATHER_PLACES = {"queens": (QUEENS, f"{START_UTC:%Y-%m-%d}", f"{END_UTC:%Y-%m-%d}")}
 
 # --- MLB Stats API ----------------------------------------------------------
 MLB_SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
@@ -80,12 +82,42 @@ GAME_EST_DURATION = pd.Timedelta(hours=3)   # оценка окончания, �
 # --- Праздники --------------------------------------------------------------
 HOLIDAY_YEARS = [2023, 2024]
 
-# --- Контракт: 1 линия СПб --------------------------------------------------
-# slug-id станций — согласовать с человеком 3 (симулятор)
-SPB_LINE1_STATIONS = [
-    "devyatkino", "grazhdansky_prospekt", "akademicheskaya", "politekhnicheskaya",
-    "ploshchad_muzhestva", "lesnaya", "vyborgskaya", "ploshchad_lenina", "chernyshevskaya",
-    "vosstaniya", "vladimirskaya", "pushkinskaya", "tekhnologichesky_institut", "baltiyskaya",
-    "narvskaya", "kirovsky_zavod", "avtovo", "leninsky_prospekt", "prospekt_veteranov",
-]
-SPB_TZ = "Europe/Moscow"
+# --- 1 линия СПб: данные организаторов (разделы 1–3 ТЗ) ----------------------
+SPB_TZ = "Europe/Moscow"                  # перехода на летнее время нет
+SPB_RAW = RAW / "spb"                     # файлы организаторов как есть, в подпапках drive-download-*
+SPB_FLOW_FILE = "Пассажиропоток 2026 Линия 1.xlsx"
+SPB_MO1_GLOB = "MO1*.xls"                 # HTML в KOI8-R с расширением .xls
+
+# Дата — строка «ДД.ММ.ГГГГ ЧЧ», час — начало интервала; автоматический разбор запрещён.
+# Шаг и формат — параметры: при 10-минутной выгрузке из АСКОП М меняются вместе.
+SPB_TS_FORMAT = "%d.%m.%Y %H"
+SPB_FREQ = "h"
+SPB_START_LOCAL = pd.Timestamp("2026-01-01 00:00")  # включительно, местное время
+SPB_END_LOCAL = pd.Timestamp("2026-09-30 00:00")    # включительно, местное время
+SPB_START_UTC = SPB_START_LOCAL.tz_localize(SPB_TZ).tz_convert("UTC")  # 2025-12-31 21:00Z
+SPB_END_UTC = SPB_END_LOCAL.tz_localize(SPB_TZ).tz_convert("UTC")      # 2026-09-29 21:00Z
+
+SPB_CLOSED_HOURS = (1, 2, 3, 4)           # метро закрыто (местное время)
+SPB_SERVICE_DAY_START = 5                 # сутки метро: 05:00 … 00:59, час 0 — конец суток
+# Разовое закрытие вестибюля: вход ≤ MAX_ENTRIES при медиане этого вестибюля и часа ≥ MIN_NORM
+SPB_CLOSURE_MAX_ENTRIES = 2
+SPB_CLOSURE_MIN_NORM = 50
+
+# Справочники (в git); slug-id станций — согласовать с человеком 3 (симулятор)
+SPB_STATIONS_CSV = REFERENCE / "spb_line1_stations.csv"
+SPB_VESTIBULES_CSV = REFERENCE / "spb_line1_vestibules.csv"
+SPB_INCIDENTS_CSV = REFERENCE / "incidents.csv"
+SPB_EVENTS_CSV = REFERENCE / "events_spb.csv"
+LINE1_OPERATIONS_YAML = REFERENCE / "line1_operations.yaml"
+
+SPB_HOURLY = INTERIM / "spb_line1_hourly.parquet"
+MO1_OUT = INTERIM / "mo1_reports.parquet"
+
+# Погода СПб: даты в GMT — 00–02 MSK 1 января приходятся на 31 декабря UTC
+SPB_COORDS = (59.94, 30.31)
+WEATHER_PLACES["spb"] = (SPB_COORDS, f"{SPB_START_UTC:%Y-%m-%d}", f"{SPB_END_LOCAL:%Y-%m-%d}")  # 2025-12-31 … 2026-09-30
+
+# Производственный календарь РФ с переносами: 0 — рабочий, 1 — нерабочий, 2 — сокращённый (pre=1)
+ISDAYOFF_URL = "https://isdayoff.ru/api/getdata"
+CALENDAR_YEAR = 2026
+CALENDAR_OUT = INTERIM / f"calendar_ru_{CALENDAR_YEAR}.parquet"

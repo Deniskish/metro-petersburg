@@ -10,6 +10,9 @@ requests==2.34.2
 urllib3==2.8.0
 holidays==0.106
 pydantic==2.13.5
+openpyxl==3.1.5           # xlsx организаторов
+beautifulsoup4==4.15.0    # МО-I: HTML в KOI8-R
+PyYAML==6.0.3             # line1_operations.yaml
 
 # модели
 lightgbm==4.7.0

@@ -1,7 +1,12 @@
+import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from src import config
-from src.contract import ContractError, make_stub, validate_records
+from src.contract import ContractError, make_stub, stub_stations, validate_file, validate_records
+from src.reference import load_stations
 
 GOOD = {
     "station_id": "vosstaniya",
@@ -22,11 +27,26 @@ def test_example_from_tz_is_valid():
 def test_stub_is_valid():
     stub = make_stub()
     preds = validate_records(stub)
-    assert len(preds) == len(config.SPB_LINE1_STATIONS) * 72 * 4
-    assert {p.station_id for p in preds} == set(config.SPB_LINE1_STATIONS)
-    assert {p.ts.date().isoformat() for p in preds} == {"2026-11-12"}
+    stations = load_stations()
+    with_data = set(stations.loc[stations.has_data, "station_id"])
+    assert set(stub_stations()) == with_data and len(with_data) == 18
+    assert len(preds) == 18 * 20 * 2
+    assert {p.station_id for p in preds} == with_data
+    assert {p.horizon_min for p in preds} == {60, 120}
+    assert all(p.ts.minute == 0 for p in preds)  # часовые слоты
+    tz = ZoneInfo(config.SPB_TZ)
+    hours = sorted({p.ts for p in preds})
+    assert hours[0] == datetime(2026, 11, 12, 5, tzinfo=tz) and hours[-1] == datetime(2026, 11, 13, 0, tzinfo=tz)
+    assert len(hours) == 20
     assert preds[0].ts.weekday() == 3  # четверг
     assert any(p.is_anomaly for p in preds) and not all(p.is_anomaly for p in preds)
+
+
+def test_stub_file_matches_generator():
+    """stub.json на диске проходит контракт и не устарел относительно make_stub()."""
+    path = config.PREDICTIONS / "stub.json"
+    validate_file(path)
+    assert json.loads(path.read_text(encoding="utf-8")) == make_stub()
 
 
 def test_stub_is_deterministic():

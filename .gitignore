@@ -13,6 +13,7 @@ data/**
 !data/predictions/contract.schema.json
 # ручные справочники (события и т.п.) — в git
 !data/reference/*.csv
+!data/reference/*.yaml
 
 logs/
 catboost_info/
