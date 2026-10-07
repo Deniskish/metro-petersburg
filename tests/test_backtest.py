@@ -68,6 +68,21 @@ def test_ratio_quantiles_calibrate_on_train():
     assert wide.q10.iloc[0] == pytest.approx(60, abs=2) and wide.q90.iloc[0] == pytest.approx(140, abs=2)
 
 
+def test_ratio_quantiles_center_is_cell_median():
+    train = pd.DataFrame({"group": "g", "band": ["07–09"] * 5 + ["10–15"] * 5, "h": 1, "f": 100.0,
+                          "y": [90.0, 95, 100, 120, 130, 50, 60, 70, 80, 200]})
+    off = BT.RatioQuantiles("x", "x", lambda df: df.f).fit(train)
+    on = BT.RatioQuantiles("x", "x", lambda df: df.f, center=True).fit(train)
+    assert (off.predict(train).q50 == 100).all()                      # по умолчанию q50 = f
+    p = on.predict(train)
+    assert p.q50.iloc[0] == pytest.approx(100) and p.q50.iloc[5] == pytest.approx(70)
+
+
+def test_holiday_slice():
+    df = pd.DataFrame({"hour": [8, 12], "group": BT.E.GROUPS[0], "is_anomaly": False, "is_holiday": [True, False]})
+    assert BT.slices(df)["праздники (контроль)"].tolist() == [True, False]
+
+
 def test_small_forecast_keeps_quantiles_equal():
     train = pd.DataFrame({"group": "g", "band": "05–06", "h": 1, "f": [100.0] * 10, "y": np.linspace(50, 150, 10)})
     m = BT.RatioQuantiles("x", "x", lambda df: df.f).fit(train)
@@ -101,6 +116,8 @@ def test_rows_targets_clean(panel):
     assert set(rows.h) == {1, 2}
     assert (rows.tau - rows.t == pd.to_timedelta(rows.h, unit="h")).all()
     assert set(rows.loc[rows.is_special, "sday"].dt.strftime("%Y-%m-%d")) == {"2026-05-29", "2026-06-27", "2026-08-31"}
+    assert set(rows.loc[rows.is_holiday, "sday"].dt.strftime("%d.%m")) == {"23.02", "08.03", "09.03", "01.05", "09.05",
+                                                                          "11.05", "12.06"}
 
 
 def test_export_file_passes_contract():

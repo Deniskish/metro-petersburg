@@ -79,7 +79,11 @@ class Panel:
 
 
 def load_panel(final: bool = False) -> Panel:
-    d = E.load()
+    return build_panel(E.load(), final)
+
+
+def build_panel(d: E.SpbData, final: bool = False) -> Panel:
+    """Нормы, входы и пороги по потоку d.grid (тест утечки подаёт сюда обрезанный поток)."""
     g = d.grid
     if not final:   # сентябрь недоступен: поток в NaN до расчёта нормы и входов
         entries = np.where((g.sday >= SEPTEMBER)[:, None], np.nan, g.entries)
@@ -122,7 +126,7 @@ def make_rows(panel: Panel, horizons=HORIZONS, for_export: bool = False) -> pd.D
             "sday": g.sday[tau], "y": g.y[tau, v],
             **{k: m[tau, v] for k, m in panel.norms.items()},
             "naive168": np.where(back >= 0, naive[np.maximum(back, 0), v], np.nan),
-            "r_t": panel.r_in[t, v], "r_level_t": panel.r_level_in[t, v], "ewm2_t": panel.ewm2_in[t, v],
+            "r_b4_t": panel.r_in[t, v], "r_level_t": panel.r_level_in[t, v], "ewm2_t": panel.ewm2_in[t, v],
         }))
     rows = pd.concat(parts, ignore_index=True)
     rows["vestibule_id"] = ves.vestibule_id.to_numpy()[rows.vi]
@@ -130,6 +134,8 @@ def make_rows(panel: Panel, horizons=HORIZONS, for_export: bool = False) -> pd.D
     rows["group"] = ves.group.to_numpy()[rows.vi]
     rows["band"] = rows.hour.map(BAND_OF)
     rows["month"] = rows.sday.dt.month
+    rows["day_type"] = panel.d.calendar.set_index("date").day_type.reindex(rows.sday).to_numpy()
+    rows["is_holiday"] = rows.day_type == "праздник"
     nights = E.event_days(panel.d.events[panel.d.events.source == "по данным потока"])
     rows["is_special"] = rows.sday.isin(set(nights) | {INCIDENT_DAY})
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -150,11 +156,14 @@ class Model(Protocol):
 @dataclass
 class RatioQuantiles:
     """Бейзлайн: q50 — точечный прогноз f; q10 и q90 — f × эмпирические квантили отношения y / f на обучении
-    по ячейке «группа × период суток × h» (нет ячейки — по всему обучению). При f < 1 все квантили = f."""
+    по ячейке «группа × период суток × h» (нет ячейки — по всему обучению). При f < 1 все квантили = f.
+    center=True — q50 = f × медиана y / f в ячейке. По умолчанию выключено: медиана прошлых месяцев не переносится
+    на тестовый месяц (уровень сдвигается), WAPE всей лестницы от неё не лучше (docs/backtest.md, --center-check)."""
     name: str
     label: str
     point: Callable[[pd.DataFrame], pd.Series]
     cells: tuple = ("group", "band", "h")
+    center: bool = False
     q: pd.DataFrame | None = None
     q_all: pd.Series | None = None
 
@@ -163,17 +172,18 @@ class RatioQuantiles:
         ok = (f >= 1) & train.y.notna()
         ratio = (train.y / f)[ok]
         keys = [train.loc[ok, c] for c in self.cells]
-        self.q = ratio.groupby(keys).quantile([QUANTILES[0], QUANTILES[2]]).unstack()
-        self.q_all = ratio.quantile([QUANTILES[0], QUANTILES[2]])
+        self.q = ratio.groupby(keys).quantile(list(QUANTILES)).unstack()
+        self.q_all = ratio.quantile(list(QUANTILES))
         return self
 
     def predict(self, rows: pd.DataFrame) -> pd.DataFrame:
         f = self.point(rows).to_numpy(dtype=float)
         idx = pd.MultiIndex.from_frame(rows[list(self.cells)])
-        lo = self.q[QUANTILES[0]].reindex(idx).fillna(self.q_all[QUANTILES[0]]).to_numpy()
-        hi = self.q[QUANTILES[2]].reindex(idx).fillna(self.q_all[QUANTILES[2]]).to_numpy()
+        k = {t: self.q[t].reindex(idx).fillna(self.q_all[t]).to_numpy() for t in QUANTILES}
+        mid = k[0.5] if self.center else 1.0
         small = f < 1
-        qs = np.column_stack([np.where(small, f, f * lo), f, np.where(small, f, f * hi)])
+        qs = np.column_stack([np.where(small, f, f * k[0.1]), np.where(small, f, f * mid),
+                              np.where(small, f, f * k[0.9])])
         qs = np.sort(qs, axis=1)
         return pd.DataFrame(qs, columns=["q10", "q50", "q90"], index=rows.index)
 
@@ -188,7 +198,7 @@ def baseline_ladder() -> list[RatioQuantiles]:
         RatioQuantiles("b4", "Профильный бейзлайн b (4 недели)", lambda df: df.b4),
         RatioQuantiles("b8", "b по 8 неделям", lambda df: df.b8),
         RatioQuantiles("b4_level", "b × уровень последних 7 дней", lambda df: df.b4_level),
-        RatioQuantiles("b4_x_r", "b × r(t)", _times_ratio("r_t")),
+        RatioQuantiles("b4_x_r", "b × r(t)", _times_ratio("r_b4_t")),
         RatioQuantiles("b4_x_ewm2", "b × сглаженное r (2 ч)", _times_ratio("ewm2_t")),
         RatioQuantiles("b4_level_x_r", "b × уровень × r(t)", _times_ratio("r_level_t", "b4_level")),
     ]
@@ -201,16 +211,20 @@ def split(rows: pd.DataFrame, fold: Fold) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train, test
 
 
-def run(rows: pd.DataFrame, models: list[Model], fold_list: list[Fold]) -> pd.DataFrame:
-    """Прогнозы всех моделей на тестах всех фолдов (обучение — заново в каждом фолде)."""
+def run(rows: pd.DataFrame, models: list[Model], fold_list: list[Fold],
+        on_fit: Callable[[Fold, Model], None] | None = None) -> pd.DataFrame:
+    """Прогнозы всех моделей на тестах всех фолдов (обучение — заново в каждом фолде).
+    on_fit(fold, model) — вызывается с обученной моделью (например, чтобы сохранить её калибровку)."""
     out = []
     for fold in fold_list:
         train, test = split(rows, fold)
         for proto in models:
             m = copy.deepcopy(proto).fit(train)
+            if on_fit is not None:
+                on_fit(fold, m)
             p = m.predict(test)
             out.append(test[["vestibule_id", "station_id", "group", "h", "tau", "hour", "band", "sday", "y",
-                             "is_special", "is_anomaly"]].assign(model=m.name, fold=fold.name).join(p))
+                             "is_special", "is_anomaly", "is_holiday"]].assign(model=m.name, fold=fold.name).join(p))
     return pd.concat(out, ignore_index=True)
 
 
@@ -232,6 +246,7 @@ def slices(df: pd.DataFrame) -> dict[str, pd.Series]:
     out = {"все часы": pd.Series(True, index=df.index), "пики 07–09, 17–19": df.hour.isin(PEAK_HOURS)}
     out.update({f"группа: {g}": df.group == g for g in E.GROUPS})
     out["аномальные часы"] = df.is_anomaly
+    out["праздники (контроль)"] = df.is_holiday
     return out
 
 
@@ -302,7 +317,12 @@ def export_august(panel: Panel, model_name: str) -> list[dict]:
     st_train = st_train[(st_train.n == st_train.n_open) & st_train.y.notna() & ~st_train.is_special]
     st_test = station_frame(test_rows, proto.point(test_rows), panel)
     q = RatioQuantiles(proto.name, proto.label, lambda df: df.f).fit(st_train).predict(st_test)
-    st = st_test.join(q)
+    return station_records(st_test.join(q), panel, f"baseline_{model_name}_v1")
+
+
+def station_records(st: pd.DataFrame, panel: Panel, model_version: str) -> list[dict]:
+    """Записи контракта из станционной таблицы с q10, q50, q90; is_anomaly — |q50 / норма − 1| выше p95 группы
+    и периода суток."""
     thr = anomaly_threshold(panel, st.group, st.hour)
     with np.errstate(invalid="ignore", divide="ignore"):
         anomaly = (st.q50 / st.b - 1).abs() > thr
@@ -311,7 +331,7 @@ def export_august(panel: Panel, model_name: str) -> list[dict]:
         qs = sorted(round(x) for x in (r.q10, r.q50, r.q90))
         records.append({"station_id": r.station_id, "ts": r.tau_local.tz_localize(config.SPB_TZ).isoformat(),
                         "horizon_min": 60 * r.h, "q10": qs[0], "q50": qs[1], "q90": qs[2], "baseline": round(r.b),
-                        "is_anomaly": bool(an), "model_version": f"baseline_{model_name}_v1"})
+                        "is_anomaly": bool(an), "model_version": model_version})
     return sorted(records, key=lambda x: (x["ts"], x["station_id"], x["horizon_min"]))
 
 
@@ -320,6 +340,7 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--final", action="store_true", help="добавить финальный тест на сентябре (один раз в конце)")
     ap.add_argument("--export-august", action="store_true", help="прогнозы лучшего бейзлайна на август по контракту")
+    ap.add_argument("--center-check", action="store_true", help="сравнить q50 = f и q50 = f × медиана y / f")
     args = ap.parse_args(argv)
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -338,6 +359,15 @@ def main(argv: list[str] | None = None) -> None:
     print(f"строк: {len(rows):,}; тест: {pred[pred.model == models[0].name].shape[0]:,} строк × {len(models)} моделей")
     print(ablation_table(res, labels))
     print(f"лучший бейзлайн: {best} — {labels[best]}")
+
+    if args.center_check:
+        centered = [replace(m, name=f"{m.name}_center", center=True) for m in models]
+        res_c = evaluate(run(rows, centered, folds(args.final)))
+        print("\nq50 = f × медиана y / f в ячейке, WAPE (среднее по h) — без центрирования → с ним:")
+        for m in models:
+            wa = lambda r, name: r[(r.model == name) & (r.fold == "все") & (r.slice == "все часы")].wape.mean()
+            pct = lambda x: f"{x * 100:.2f} %".replace(".", ",")
+            print(f"  {labels[m.name]}: {pct(wa(res, m.name))} → {pct(wa(res_c, m.name + '_center'))}")
 
     if args.export_august:
         if args.final:

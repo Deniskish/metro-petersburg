@@ -1,0 +1,47 @@
+{
+ "features": [
+  "vestibule",
+  "station_group",
+  "hour_tau",
+  "dow_tau",
+  "day_type_tau",
+  "h",
+  "b4_tau",
+  "level",
+  "y_t",
+  "y_t1",
+  "y_tau24",
+  "y_tau168",
+  "r_t",
+  "ewm_r_2h",
+  "ewm_r_6h",
+  "cum_ratio",
+  "ratio_168",
+  "r_line",
+  "ewm_r_line_2h",
+  "r_neighbors",
+  "r_twin",
+  "share_dev",
+  "r_yday",
+  "cum_ratio_yday",
+  "fc_precip_tau",
+  "fc_precip_3h_tau"
+ ],
+ "groups": [
+  "база",
+  "ядро динамики",
+  "кросс",
+  "вчера",
+  "погода"
+ ],
+ "target": "ratio",
+ "step_model": "lgbm_s5",
+ "ratio_full_model": "lgbm_full_ratio",
+ "ratio_vs_log1p": {
+  "dwape": 0.002672989526739807,
+  "lo": 0.0020012374411796053,
+  "hi": 0.0032402917511788164,
+  "p_dm": 1.1605490831474294e-09
+ },
+ "baseline": "b4_level_x_r"
+}
