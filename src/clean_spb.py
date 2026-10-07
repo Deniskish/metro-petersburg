@@ -12,6 +12,8 @@ vestibule_id, station_id, ts_utc, ts_local, entries, is_closed_hour, is_vestibul
   Нули малого потока (00 ч на конечных) — настоящие значения, флага у них нет.
 - is_incident — ручная разметка из incidents.csv, интервал [start_local, end_local); "*" — вся линия.
 
+Часы 00–02 в файле подписаны датой прошедших суток метро (config.SPB_PREV_DAY_LABEL_BEFORE): метка «D 01» — это D+1 01:00.
+
 Ещё: погода СПб (weather_*_spb), производственный календарь (calendar_ru_2026), отчёты МО-I (mo1_reports).
 """
 import fnmatch
@@ -106,6 +108,11 @@ def parse_ts(s: pd.Series, fmt: str = config.SPB_TS_FORMAT) -> pd.Series:
     return ts
 
 
+def label_to_local(label: pd.Series, before: int = config.SPB_PREV_DAY_LABEL_BEFORE) -> pd.Series:
+    """Метка файла → реальное местное время: часы раньше `before` относятся к следующему календарному дню."""
+    return label + pd.to_timedelta((label.dt.hour < before).astype(int), unit="D")
+
+
 def regime_open(hour: pd.Series, first: pd.Series, last: pd.Series) -> pd.Series:
     """Час внутри режима вестибюля first…last; сутки метро начинаются в 05:00, поэтому last = 0 — полночный час."""
     pos = service_pos(hour)
@@ -146,7 +153,7 @@ def clean_flow(raw: pd.DataFrame, vestibules: pd.DataFrame, incidents: pd.DataFr
     if bad_inc:
         raise ValueError(f"incidents.csv: неизвестные vestibule_id {sorted(bad_inc)}")
 
-    naive = parse_ts(raw.date_raw)
+    naive = label_to_local(parse_ts(raw.date_raw))
     ts_local = naive.dt.tz_localize(tz, ambiguous="raise", nonexistent="raise")
     ts_utc = ts_local.dt.tz_convert("UTC")
     offsets = (naive - ts_utc.dt.tz_localize(None)).unique()
@@ -160,6 +167,9 @@ def clean_flow(raw: pd.DataFrame, vestibules: pd.DataFrame, incidents: pd.DataFr
 
     start_utc = start_local.tz_localize(tz).tz_convert("UTC")
     end_utc = end_local.tz_localize(tz).tz_convert("UTC")
+    tail = obs.ts_utc > end_utc            # одиночная метка «30.09 00» = 01.10 00:00 — за концом сетки
+    dropped = obs[tail]
+    obs = obs[~tail]
     grid = build_grid(vestibules.vestibule_id.tolist(), start_utc, end_utc, freq, id_col="vestibule_id")
     key = ["vestibule_id", "ts_utc"]
     g_idx, o_idx = pd.MultiIndex.from_frame(grid[key]), pd.MultiIndex.from_frame(obs[key])
@@ -174,7 +184,10 @@ def clean_flow(raw: pd.DataFrame, vestibules: pd.DataFrame, incidents: pd.DataFr
     df["is_closed_hour"] = df.ts_local.dt.hour.isin(config.SPB_CLOSED_HOURS)
     df["is_vestibule_closed"] = closure_reason(df, vestibules) != ""
     df["is_incident"] = incident_mask(df, incidents)
-    return df[OUT_COLS].sort_values(key, ignore_index=True)
+    out = df[OUT_COLS].sort_values(key, ignore_index=True)
+    out.attrs["dropped_tail"] = {"rows": len(dropped), "entries": int(dropped.entries.sum()),
+                                 "ts_local": sorted(dropped.ts_utc.dt.tz_convert(tz).astype(str).unique())}
+    return out
 
 
 # --- Календарь ------------------------------------------------------------------
@@ -271,8 +284,12 @@ def report(df: pd.DataFrame, vestibules: pd.DataFrame, stations: pd.DataFrame,
     per_v = df.groupby("vestibule_id").size()
     print(f"ts_local: {df.ts_local.min()} … {df.ts_local.max()}")
     print(f"ts_utc:   {df.ts_utc.min()} … {df.ts_utc.max()}")
+    tail = df.attrs.get("dropped_tail", {"rows": 0, "entries": 0, "ts_local": []})
     print(f"строк: {len(df):,}; вестибюлей: {df.vestibule_id.nunique()}; станций: {df.station_id.nunique()}; "
-          f"часов на вестибюль: {sorted(per_v.unique().tolist())}; сумма входов: {df.entries.sum():,} (= итогу файла)")
+          f"часов на вестибюль: {sorted(per_v.unique().tolist())}; сумма входов: {df.entries.sum():,} "
+          f"+ за концом сетки {tail['entries']:,} = итогу файла")
+    print(f"часы 00–02 в файле подписаны датой прошедших суток метро — переведены в реальное время; "
+          f"отброшено {tail['rows']} строк за концом сетки ({', '.join(tail['ts_local'])})")
 
     print("\n=== Сопоставление названий (порядок по линии: Девяткино → пр. Ветеранов) ===")
     names = vestibules.merge(stations[["station_id", "name", "line_order"]], on="station_id")

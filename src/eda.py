@@ -307,21 +307,23 @@ def weather_flags(w: pd.DataFrame) -> pd.DataFrame:
     })
 
 
-def weather_effect(mta: pd.DataFrame, flags: pd.DataFrame, n_boot: int = 1000, seed: int = 0) -> pd.DataFrame:
-    """Поток в часы с осадками против среднего сухих часов той же ячейки (станция × час × тип дня × месяц).
+def weather_effect(mta: pd.DataFrame, flags: pd.DataFrame, n_boot: int = 1000, seed: int = 0,
+                   cats: dict[str, str] = WEATHER_CATS, ref: str = "dry") -> pd.DataFrame:
+    """Поток в часы с погодой cats против среднего опорных часов ref той же ячейки (станция × час × тип дня × месяц).
 
-    Эффект = Σ входов в часы с осадками / Σ сухой нормы − 1; 95 % интервал — бутстреп по дням.
+    Эффект = Σ входов в часы с погодой / Σ опорной нормы − 1; 95 % интервал — бутстреп по дням.
+    По умолчанию — осадки против сухих часов; для температуры опорные часы — «умеренные».
     """
     d = mta[mta.hour.isin(WORK_HOURS) & mta.entries.notna() & (mta.day_type != "праздник")].merge(flags, on="ts_utc")
     d["ym"] = d.date.dt.to_period("M")
     keys = ["station_id", "hour", "day_type", "ym"]
-    dry = d[d.dry].groupby(keys, observed=True).entries.agg(dry_mean="mean", dry_n="size")
+    dry = d[d[ref]].groupby(keys, observed=True).entries.agg(dry_mean="mean", dry_n="size")
     d = d.join(dry[dry.dry_n >= 3], on=keys)
     segments = {"все дни": d.day_type.notna(), "будни": d.day_type == "будни",
                 "выходные": d.day_type.isin(["суббота", "воскресенье"])}
     rng = np.random.default_rng(seed)
     rows = []
-    for cat, label in WEATHER_CATS.items():
+    for cat, label in cats.items():
         for seg, mask in segments.items():
             w = d[d[cat] & mask & d.dry_mean.notna()]
             per_day = w.groupby("date").agg(num=("entries", "sum"), den=("dry_mean", "sum"))

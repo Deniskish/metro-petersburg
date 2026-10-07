@@ -53,7 +53,7 @@ def test_events(stations):
     assert not ev.verified.any()
     assert {"Парад Победы", "День города", "Алые паруса", "День знаний", "Продлённая работа метро"} <= set(ev.event)
     sails = ev[ev.event == "Алые паруса"].iloc[0]
-    assert sails.start_local == pd.Timestamp("2026-06-27 01:00")
+    assert sails.start_local == pd.Timestamp("2026-06-28 01:00")   # праздник 27.06, ночь на 28.06
 
 
 def test_bad_reference_raises(tmp_path, stations, vestibules):

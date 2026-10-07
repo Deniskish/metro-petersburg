@@ -3,8 +3,8 @@ import pandas as pd
 import pytest
 
 from src import config, reference
-from src.clean_spb import (FLOW_HEADER, FOOTER_PREFIX, clean_flow, find_raw, parse_flow_sheet, parse_ts,
-                           read_flow_xlsx)
+from src.clean_spb import (FLOW_HEADER, FOOTER_PREFIX, clean_flow, find_raw, label_to_local, parse_flow_sheet,
+                           parse_ts, read_flow_xlsx)
 
 TZ = config.SPB_TZ
 FMT = config.SPB_TS_FORMAT
@@ -21,10 +21,15 @@ VEST = pd.DataFrame({
 NO_INCIDENTS = pd.DataFrame(columns=reference.INCIDENT_COLS)
 
 
+def _label(t: pd.Timestamp) -> str:
+    """Метка как у организаторов: часы 00–02 подписаны датой прошедших суток метро."""
+    return (t - pd.Timedelta(days=1) if t.hour < config.SPB_PREV_DAY_LABEL_BEFORE else t).strftime(FMT)
+
+
 def _raw(start=START, end=END) -> pd.DataFrame:
     """Сырые строки как у организаторов: дата строкой, ночью 01–04 нули, днём 100."""
     ts = pd.date_range(start, end, freq="h")
-    return pd.DataFrame([{"date_raw": t.strftime(FMT), "raw_name": n,
+    return pd.DataFrame([{"date_raw": _label(t), "raw_name": n,
                           "entries": 0 if t.hour in config.SPB_CLOSED_HOURS else 100}
                          for n in VEST.raw_name for t in ts])
 
@@ -84,6 +89,28 @@ def test_parse_ts_day_first():
     ts = parse_ts(pd.Series(["01.02.2026 05", "01.03.2026 23", "12.01.2026 08"]))
     assert ts.tolist() == [pd.Timestamp("2026-02-01 05:00"), pd.Timestamp("2026-03-01 23:00"),
                            pd.Timestamp("2026-01-12 08:00")]
+
+
+def test_labels_before_3h_belong_to_next_day():
+    """«27.06.2026 01» — это 28.06 01:00, а «28.06.2026 03» — 28.06 03:00: ночь «Алых парусов» непрерывна."""
+    lab = parse_ts(pd.Series(["27.06.2026 00", "27.06.2026 01", "27.06.2026 02", "28.06.2026 03", "27.06.2026 23"]))
+    assert label_to_local(lab).tolist() == [pd.Timestamp("2026-06-28 00:00"), pd.Timestamp("2026-06-28 01:00"),
+                                            pd.Timestamp("2026-06-28 02:00"), pd.Timestamp("2026-06-28 03:00"),
+                                            pd.Timestamp("2026-06-27 23:00")]
+
+
+def test_row_after_grid_end_is_dropped_and_counted():
+    raw = _raw()
+    extra = pd.DataFrame({"date_raw": _label(END + pd.Timedelta(hours=2)), "raw_name": VEST.raw_name, "entries": 7})
+    df = _clean(pd.concat([raw, extra], ignore_index=True))
+    assert len(df) == len(raw) and df.attrs["dropped_tail"]["rows"] == 3 and df.attrs["dropped_tail"]["entries"] == 21
+
+
+def test_row_before_grid_start_raises():
+    raw = _raw()
+    extra = pd.DataFrame({"date_raw": _label(START - pd.Timedelta(hours=5)), "raw_name": VEST.raw_name, "entries": 7})
+    with pytest.raises(ValueError, match="Сетка неполная"):
+        _clean(pd.concat([raw, extra], ignore_index=True))
 
 
 def test_text_sorted_input_gives_sorted_grid():
@@ -184,7 +211,7 @@ def vestibules():
 
 def test_real_grid(real, vestibules):
     n_hours = int((config.SPB_END_UTC - config.SPB_START_UTC) / pd.Timedelta(hours=1)) + 1
-    assert n_hours == 6_529
+    assert n_hours == 6_528
     assert len(real) == 23 * n_hours
     assert not real.duplicated(["vestibule_id", "ts_utc"]).any()
     assert set(real.vestibule_id) == set(vestibules.vestibule_id)
@@ -202,7 +229,8 @@ def test_real_names_and_totals(real, vestibules):
     assert len(vestibules) == 23 and real.station_id.nunique() == 18
     assert set(real.station_id) == set(stations.loc[stations.has_data, "station_id"])
     assert "tekhnologichesky_institut" not in set(real.station_id)
-    assert real.entries.sum() == 164_877_135  # строка итога в файле организаторов
+    # строка итога в файле — 164 877 135; 418 входов — метка «30.09 00» (= 01.10 00:00) за концом сетки
+    assert real.entries.sum() == 164_877_135 - 418
 
 
 @pytest.fixture(scope="module")
@@ -234,7 +262,7 @@ def test_real_dates_in_right_month(line_by_hour):
     assert len(ratio) == 272 and workday.notna().all()
     assert ((ratio > 1.2) == workday).all(), ratio[(ratio > 1.2) != workday]
     per_month = line_by_hour.groupby(line_by_hour.index.month).size()
-    assert per_month.to_dict() == {1: 744, 2: 672, 3: 744, 4: 720, 5: 744, 6: 720, 7: 744, 8: 744, 9: 697}
+    assert per_month.to_dict() == {1: 741, 2: 672, 3: 744, 4: 720, 5: 744, 6: 720, 7: 744, 8: 744, 9: 699}
 
 
 def test_real_raw_dates_round_trip():
@@ -259,7 +287,7 @@ def test_real_flags(real):
 
     lp2 = real[real.vestibule_id == "leninsky_prospekt_2"]
     assert set(hour[lp2.index][lp2.is_vestibule_closed]) == {5, 22, 23, 0}
-    assert lp2.is_vestibule_closed.sum() == 4 * 272 + 1   # + 00 ч 30 сентября
+    assert lp2.is_vestibule_closed.sum() == 4 * 272
 
     inc = real[real.is_incident]
     assert len(inc) == 23 * 4
@@ -276,14 +304,14 @@ def test_real_special_nights_are_events(line_by_hour):
     """Все часы с ночными входами по линии > 100 покрыты событиями «по данным потока» и наоборот."""
     ev = reference.load_events()
     nights = ev[ev.source == "по данным потока"]
-    assert len(nights) == 7
-    assert nights.event.tolist().count("Алые паруса") == 1
+    assert len(nights) == 4
+    assert nights.set_index("event").start_local["Алые паруса"] == pd.Timestamp("2026-06-28 01:00")
     closed = line_by_hour[line_by_hour.index.hour.isin(config.SPB_CLOSED_HOURS)]
     busy = closed[closed > 100].index
     covered = lambda t: ((nights.start_local <= t) & (t < nights.end_local)).any()
     assert all(covered(t) for t in busy)
-    for e in nights.itertuples():
-        assert line_by_hour[e.start_local] > 100, e
+    for e in nights.itertuples():   # в каждом окне есть часы с ночными входами
+        assert (line_by_hour[e.start_local:e.end_local - pd.Timedelta(hours=1)] > 100).any(), e
 
 
 # --- Календарь, погода, МО-I ------------------------------------------------
@@ -303,7 +331,7 @@ def test_real_weather(kind):
     if not path.exists():
         pytest.skip(f"нет {path.name}")
     w = pd.read_parquet(path)
-    assert len(w) == 6_529 and w.ts_utc.is_unique
+    assert len(w) == 6_528 and w.ts_utc.is_unique
     assert w.ts_utc.min() == config.SPB_START_UTC and w.ts_utc.max() == config.SPB_END_UTC
     assert not w.drop(columns=["ts_utc", "ts_local"]).isna().any().any()
 

@@ -92,10 +92,16 @@ SPB_MO1_GLOB = "MO1*.xls"                 # HTML в KOI8-R с расширени
 # Шаг и формат — параметры: при 10-минутной выгрузке из АСКОП М меняются вместе.
 SPB_TS_FORMAT = "%d.%m.%Y %H"
 SPB_FREQ = "h"
-SPB_START_LOCAL = pd.Timestamp("2026-01-01 00:00")  # включительно, местное время
-SPB_END_LOCAL = pd.Timestamp("2026-09-30 00:00")    # включительно, местное время
-SPB_START_UTC = SPB_START_LOCAL.tz_localize(SPB_TZ).tz_convert("UTC")  # 2025-12-31 21:00Z
-SPB_END_UTC = SPB_END_LOCAL.tz_localize(SPB_TZ).tz_convert("UTC")      # 2026-09-29 21:00Z
+# Часы раньше этого подписаны датой прошедших суток метро: «27.06.2026 01» — это 28.06 01:00 (найдено на EDA:
+# вход в 00 ч выше всего у меток пт и сб, аномалия «D 00» связана с «D 23», а не с «D−1 23», ночь «Алых парусов»
+# 27→28.06 непрерывна только при сдвиге).
+SPB_PREV_DAY_LABEL_BEFORE = 3
+# Реальное время в файле: 01.01 03:00 … 30.09 02:00 — часов 00–02 1 января в выгрузке нет, а метка «30.09.2026 00»
+# (= 01.10 00:00) стоит отдельно от сетки и отбрасывается.
+SPB_START_LOCAL = pd.Timestamp("2026-01-01 03:00")  # включительно, местное время
+SPB_END_LOCAL = pd.Timestamp("2026-09-30 02:00")    # включительно, местное время
+SPB_START_UTC = SPB_START_LOCAL.tz_localize(SPB_TZ).tz_convert("UTC")  # 2026-01-01 00:00Z
+SPB_END_UTC = SPB_END_LOCAL.tz_localize(SPB_TZ).tz_convert("UTC")      # 2026-09-29 23:00Z
 
 SPB_CLOSED_HOURS = (1, 2, 3, 4)           # метро закрыто (местное время)
 SPB_SERVICE_DAY_START = 5                 # сутки метро: 05:00 … 00:59, час 0 — конец суток
@@ -115,7 +121,7 @@ MO1_OUT = INTERIM / "mo1_reports.parquet"
 
 # Погода СПб: даты в GMT — 00–02 MSK 1 января приходятся на 31 декабря UTC
 SPB_COORDS = (59.94, 30.31)
-WEATHER_PLACES["spb"] = (SPB_COORDS, f"{SPB_START_UTC:%Y-%m-%d}", f"{SPB_END_LOCAL:%Y-%m-%d}")  # 2025-12-31 … 2026-09-30
+WEATHER_PLACES["spb"] = (SPB_COORDS, "2025-12-31", f"{SPB_END_LOCAL:%Y-%m-%d}")  # с запасом: 2025-12-31 … 2026-09-30
 
 # Производственный календарь РФ с переносами: 0 — рабочий, 1 — нерабочий, 2 — сокращённый (pre=1)
 ISDAYOFF_URL = "https://isdayoff.ru/api/getdata"
