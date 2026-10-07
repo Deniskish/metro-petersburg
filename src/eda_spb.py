@@ -1111,14 +1111,16 @@ def screen(d: SpbData, horizons=(1, 2), n_perm: int = 1000, n_boot: int = 1000, 
     return out
 
 
-def forecast_gain(d: SpbData, scr: pd.DataFrame, top: int = 15, test_months=range(4, 10), n_bins: int = 10) -> pd.DataFrame:
-    """Для `top` лучших кандидатов каждого горизонта: прогноз b · e^поправка против b, поправка — медиана цели
-    в квантильной корзине кандидата по прошлым месяцам (расширяющееся окно) минус общая медиана тех же месяцев.
+def forecast_gain(d: SpbData, scr: pd.DataFrame, top: int | None = None, test_months=range(4, 9),
+                  n_bins: int = 10) -> pd.DataFrame:
+    """Для значимых кандидатов без дублей (или `top` сильнейших) каждого горизонта: прогноз b · e^поправка против b,
+    поправка — медиана цели в квантильной корзине кандидата по прошлым месяцам (расширяющееся окно) минус общая
+    медиана тех же месяцев. Тест — апрель–август: сентябрь — финальный тест, отбор признаков его не видит.
     ΔWAPE, ДИ парным бутстрепом по дням, p Диболда–Мариано."""
     rows = []
     for h, sh in scr.groupby("h"):
         pick = sh[(sh.p_bh < 0.05) & (sh.duplicate_of == "") & sh.effect_pct.notna()]
-        pick = pick.reindex(pick.effect_pct.abs().sort_values(ascending=False).index).head(top)
+        pick = pick.reindex(pick.effect_pct.abs().sort_values(ascending=False).index).head(top or len(pick))
         tr = target_rows(d, h)
         cands = candidate_matrices(d, h)
         for name in pick.candidate:
@@ -1156,7 +1158,12 @@ def _pp2(x: float) -> str:
 
 
 def verdict(scr: pd.DataFrame, gain: pd.DataFrame, noise_p80: float) -> pd.DataFrame:
-    """Вердикт «брать / проверить в абляции / отбросить» с причиной."""
+    """Вердикт «брать / проверить в абляции / отбросить» с причиной.
+
+    Шум слота — разброс одного наблюдения, а эффект признака — систематический сдвиг, поэтому порог шума сам по себе
+    кандидата не отбрасывает: если эффект меньше шума, но прогноз с поправкой по кандидату точнее (ΔWAPE > 0,
+    ДИ выше нуля), кандидат идёт в абляцию.
+    """
     out = scr.merge(gain, on=["candidate", "h"], how="left")
     noise = f"±{noise_p80 * 100:.1f}".replace(".", ",") + " %"
     v, why = [], []
@@ -1174,7 +1181,12 @@ def verdict(scr: pd.DataFrame, gain: pd.DataFrame, noise_p80: float) -> pd.DataF
             else:
                 v.append("отбросить"); why.append(f"не значим (p_BH = {r.p_bh:.2f})".replace(".", ","))
         elif not big:
-            v.append("отбросить"); why.append(f"эффект {_pct1(r.effect_pct)} меньше шума слота {noise}")
+            if not pd.isna(r.dwape) and r.dwape > 0 and r.dwape_lo > 0:
+                v.append("проверить в абляции")
+                why.append(f"эффект {_pct1(r.effect_pct)} меньше шума {noise}, но ΔWAPE {_pp2(r.dwape)} (ДИ выше нуля)")
+            else:
+                gain_txt = "" if pd.isna(r.dwape) else f", ΔWAPE {_pp2(r.dwape)} не отличим от 0"
+                v.append("отбросить"); why.append(f"эффект {_pct1(r.effect_pct)} меньше шума слота {noise}{gain_txt}")
         elif r.stable is not True and r.stable != 1.0:
             v.append("проверить в абляции")
             if r.stable in (False, 0.0):
@@ -1201,3 +1213,16 @@ def save_screening(v: pd.DataFrame, path=SCREENING_OUT) -> pd.DataFrame:
     out = v.reindex(columns=SCREENING_COLS).round(5)
     out.to_csv(path, index=False)
     return out
+
+
+GAIN_COLS = ["dwape", "dwape_lo", "dwape_hi", "p_dm", "verdict", "reason"]
+
+
+def revise_screening(d: SpbData, path=SCREENING_OUT) -> pd.DataFrame:
+    """Пересмотр вердиктов без перезапуска перестановок: эффекты и p — из сохранённой таблицы, ΔWAPE — заново
+    для всех значимых кандидатов (апрель–август), вердикт — по текущему правилу `verdict`."""
+    scr = pd.read_csv(path).drop(columns=GAIN_COLS)
+    scr["duplicate_of"] = scr.duplicate_of.fillna("")
+    noise = noise_table(d)
+    p80 = noise[(noise.level == "Вся линия") & (noise.band == "все часы")].p80.iloc[0]
+    return save_screening(verdict(scr, forecast_gain(d, scr), p80), path)
