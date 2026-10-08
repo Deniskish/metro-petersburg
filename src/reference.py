@@ -7,7 +7,7 @@ import yaml
 
 from src import config
 
-STATION_COLS = ["station_id", "name", "line_order", "n_vestibules", "has_data"]
+STATION_COLS = ["station_id", "name", "name_external", "line_order", "n_vestibules", "has_data"]
 VESTIBULE_COLS = ["vestibule_id", "raw_name", "station_id", "vestibule_no", "closes_early", "first_hour", "last_hour"]
 INCIDENT_COLS = ["incident_id", "vestibule_id", "start_local", "end_local", "description", "source"]
 EVENT_COLS = ["event", "start_local", "end_local", "venue", "nearest_station_id", "source", "verified"]
@@ -46,10 +46,12 @@ def _unique(df: pd.DataFrame, col: str, path: Path) -> None:
 
 
 def load_stations(path: Path = config.SPB_STATIONS_CSV) -> pd.DataFrame:
-    """19 станций 1 линии в порядке Девяткино → пр. Ветеранов; has_data=false — нет в данных организаторов."""
-    df = _read(path, STATION_COLS, ["station_id", "name"])
+    """19 станций 1 линии в порядке Девяткино → пр. Ветеранов; has_data=false — нет в данных организаторов.
+    name_external — название станции в external_data (модуль внешних данных), см. src/external_adapter.py."""
+    df = _read(path, STATION_COLS, ["station_id", "name", "name_external"])
     _bool(df, "has_data", path)
     _unique(df, "station_id", path)
+    _unique(df, "name_external", path)
     df = df.sort_values("line_order", ignore_index=True)
     if df.line_order.tolist() != list(range(len(df))):
         raise ValueError(f"{path.name}: line_order должен идти 0…{len(df) - 1} без пропусков")

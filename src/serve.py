@@ -12,10 +12,16 @@ forecast(now) берёт только данные до конца часа t0 =
 Модель по умолчанию (model="auto") — самая свежая из сохранённых, у которой конец обучения + 7 суток раньше now:
 модели фолдов (models/lgbm_fold_*), финального теста (lgbm_holdout) и финальная (lgbm_final). Если такой нет —
 lgbm_final с предупреждением «модель видела этот период».
+
+Погода (weather_source): auto — для «сейчас» (now в пределах часа от текущего времени) прогноз Яндекса, если задан
+YANDEX_WEATHER_API_KEY, иначе — исторический прогноз Open-Meteo, как при обучении; openmeteo и yandex — явно.
+Источник по часам и предупреждения — в meta["weather"]. Поезда и события (external_data) в модель не идут —
+только контекст для LLM-слоя: explanations[…]["context"] (src/external_adapter.py).
 """
 import argparse
 import functools
 import json
+import math
 from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
@@ -26,6 +32,7 @@ import pandas as pd
 from src import backtest as BT
 from src import config, contract
 from src import eda_spb as E
+from src import external_adapter as A
 from src import features as F
 from src import model as M
 
@@ -33,6 +40,8 @@ FULL = "lgbm_final"
 HOLDOUT = "lgbm_holdout"
 GAP = pd.Timedelta(days=BT.GAP_DAYS)
 WARNING = "модель видела этот период: прогноз не вне выборки"
+WEATHER_SOURCES = ("auto", "openmeteo", "yandex")
+LIVE = pd.Timedelta(hours=1)     # now ближе часа к текущему времени — прогноз «сейчас»
 
 
 class Forecast(NamedTuple):
@@ -44,6 +53,16 @@ class Forecast(NamedTuple):
 def _local(ts) -> pd.Timestamp:
     ts = pd.Timestamp(ts)
     return ts.tz_convert(config.SPB_TZ).tz_localize(None) if ts.tzinfo is not None else ts
+
+
+def _wall_clock() -> pd.Timestamp:
+    """Текущее местное время СПб (тесты подменяют)."""
+    return pd.Timestamp.now(tz=config.SPB_TZ).tz_localize(None)
+
+
+def is_live(now) -> bool:
+    """Прогноз «сейчас», а не повтор прошлого: now в пределах часа от текущего времени."""
+    return abs(_local(now) - _wall_clock()) < LIVE
 
 
 def origin(now) -> pd.Timestamp:
@@ -94,8 +113,24 @@ def cut_data(d: E.SpbData, t0_utc: pd.Timestamp) -> E.SpbData:
     return replace(d, grid=grid, df=d.df[d.df.ts_utc <= t0_utc].reset_index(drop=True))
 
 
-def forecast(now, model: str = "auto", models_dir: Path = M.MODELS, data: E.SpbData | None = None) -> Forecast:
-    """Прогноз по контракту на 18 станций, горизонты 60 и 120 мин, и топ-3 причины — по данным только до now."""
+def _weather_features(rows: pd.DataFrame) -> list[dict]:
+    """Признаки погоды, которые видела модель, по слотам (у всех вестибюлей одинаковы); мм — до 0,001."""
+    w = rows.drop_duplicates("tau").sort_values("tau")
+    return [{"ts": A.slot_ts(tau), "fc_precip_tau": float(p),
+             "fc_precip_3h_tau": None if math.isnan(p3) else round(float(p3), 3)}
+            for tau, p, p3 in zip(w.tau, w.fc_precip_tau, w.fc_precip_3h_tau)]
+
+
+def forecast(now, model: str = "auto", models_dir: Path = M.MODELS, data: E.SpbData | None = None,
+             weather_source: str = "auto", weather_provider=None, railway_provider=None,
+             events: list[A.LocatedEvent] | None = None) -> Forecast:
+    """Прогноз по контракту на 18 станций, горизонты 60 и 120 мин, и топ-3 причины — по данным только до now.
+
+    weather_source: auto | openmeteo | yandex (см. описание модуля); weather_provider — объект с get_hourly_forecast
+    вместо YandexWeatherProvider. railway_provider (get_arrivals) и events (A.locate_events) — контекст для LLM-слоя;
+    без провайдера поездов Rasp подключается сам только для «сейчас» при YANDEX_RASP_API_KEY."""
+    if weather_source not in WEATHER_SOURCES:
+        raise ValueError(f"weather_source: {' | '.join(WEATHER_SOURCES)}, а не {weather_source!r}")
     t0 = origin(now)
     t0_utc = t0.tz_localize(config.SPB_TZ).tz_convert("UTC")
     d = data if data is not None else _data()
@@ -103,16 +138,23 @@ def forecast(now, model: str = "auto", models_dir: Path = M.MODELS, data: E.SpbD
         raise ValueError(f"now = {now}: вне периода данных ({BT.TRAIN_START:%d.%m.%Y} – {d.grid.local[-1]:%d.%m.%Y})")
     name, oos, warning = choose_model(now, models_dir, model)
     m, st_q, meta = _bundle(str(Path(models_dir) / name))
+    live = is_live(now)
+    source = ("yandex" if live else "openmeteo") if weather_source == "auto" else weather_source
+    weather_fc, weather = A.weather_table(d.forecast, t0_utc, source, weather_provider)
+    d = replace(d, forecast=weather_fc)
     panel = BT.build_panel(cut_data(d, t0_utc), final=True)
     panel = replace(panel, thresholds=pd.DataFrame(meta["thresholds"]))
     rows = BT.make_rows(panel, for_export=True)
     rows = F.add_features(rows[rows.t == t0_utc], panel)
     records, expl, _ = M.station_forecast(m, st_q, rows, panel, meta["anomaly_rule"],
                                           f"{meta['model_version']}/{name}")
+    context = A.add_context(expl, railway_provider, events, live)
     info = {"model": name, "model_version": meta["model_version"], "train_start": meta["train_start"],
             "train_end": meta["train_end"], "out_of_sample": oos, "warning": warning,
             "now": str(_local(now)), "t0": t0.tz_localize(config.SPB_TZ).isoformat(),
-            "config_sha256": meta.get("config_sha256")}
+            "config_sha256": meta.get("config_sha256"),
+            "weather": {"requested": weather_source, **weather, "features": _weather_features(rows)},
+            "context": context}
     return Forecast(records, expl, info)
 
 
@@ -149,8 +191,11 @@ def _header(fc: Forecast) -> str:
     span = f"{pd.Timestamp(m['train_start']):%d.%m}–{pd.Timestamp(m['train_end']):%d.%m.%Y}"
     oos = "вне выборки" if m["out_of_sample"] else f"НЕ вне выборки — {m['warning']}"
     t0 = pd.Timestamp(m["t0"])
+    w = m["weather"]
+    weather = {"openmeteo": "Open-Meteo", "yandex": "Яндекс", "yandex+openmeteo": "Яндекс и Open-Meteo"}[w["source"]]
     return (f"Прогноз по данным до {m['now']} (последний закрытый час — {t0:%d.%m %H}:00)\n"
-            f"Модель: {m['model']} (обучена {span}), {oos}")
+            f"Модель: {m['model']} (обучена {span}), {oos}\n"
+            f"Погода: {weather}" + (f"\nПредупреждение: {w['warning']}" if w["warning"] else ""))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -159,6 +204,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--holdout", action="store_true", help="с --train: обучение по 24.08 → models/lgbm_holdout/")
     ap.add_argument("--now", help="момент прогноза, местное время: «2026-08-31 08:59»")
     ap.add_argument("--model", default="auto", help="auto (по умолчанию) или имя папки в models/")
+    ap.add_argument("--weather", default="auto", choices=WEATHER_SOURCES,
+                    help="погода: auto (по умолчанию: «сейчас» — Яндекс, прошлое — Open-Meteo), openmeteo, yandex")
     ap.add_argument("--stations", help="станции через запятую (для печати)")
     ap.add_argument("--json", help="записать записи, причины и meta в файл")
     args = ap.parse_args(argv)
@@ -169,7 +216,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"{path.relative_to(config.ROOT)}: обучение {meta['train_start']} – {meta['train_end']}, "
               f"деревьев {meta['best_iter']}")
     if args.now:
-        fc = forecast(args.now, args.model)
+        fc = forecast(args.now, args.model, weather_source=args.weather)
         contract.validate_records(fc.records)
         print(_header(fc))
         df = table(fc, args.stations.split(",") if args.stations else None)
