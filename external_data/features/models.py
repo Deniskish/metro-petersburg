@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from external_data.calendar.models import DayType, moscow_time
+from external_data.railway.models import Count
 
 
 class WeatherFeatures(BaseModel):
@@ -45,6 +46,21 @@ class EventFeatures(BaseModel):
     has_event: bool = Field(strict=True)
 
 
+class RailwayFeatureValues(BaseModel):
+    """Projection of ready RailwayFeatures without duplicate time/station fields."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    railway_name: str
+    arrivals_next_15m: Count
+    arrivals_next_30m: Count
+    arrivals_next_60m: Count
+    arrivals_next_120m: Count
+    train_arrivals_next_30m: Count
+    suburban_arrivals_next_30m: Count
+    minutes_to_next_arrival: float | None = Field(ge=0)
+
+
 class ExternalFeatures(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -53,6 +69,7 @@ class ExternalFeatures(BaseModel):
     weather: WeatherFeatures
     calendar: CalendarFeatureValues
     events: EventFeatures
+    railway: RailwayFeatureValues | None = None
 
     @field_validator("timestamp")
     @classmethod

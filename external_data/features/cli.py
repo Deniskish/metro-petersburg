@@ -5,6 +5,7 @@ from datetime import datetime
 from external_data.calendar.models import CalendarFeatures
 from external_data.events.models import Event
 from external_data.weather.models import WeatherObservation
+from external_data.railway.models import RailwayFeatures
 
 from .builder import build_external_features
 
@@ -26,7 +27,14 @@ def main() -> int:
         Event(event_name="Демо-концерт", event_type="concert", expected_people=1000),
         Event(event_name="Демо-фестиваль", event_type="festival", expected_people=None),
     ]
-    result = build_external_features(timestamp, weather, calendar, events)
+    station = "Площадь Восстания"
+    railway = RailwayFeatures(
+        timestamp=timestamp, metro_station=station, railway_name="Московский вокзал",
+        arrivals_next_15m=0, arrivals_next_30m=1, arrivals_next_60m=3,
+        arrivals_next_120m=7, train_arrivals_next_30m=1, suburban_arrivals_next_30m=0,
+        minutes_to_next_arrival=18,
+    )
+    result = build_external_features(timestamp, weather, calendar, events, station=station, railway=railway)
     print(result.model_dump_json(indent=2))
     return 0
 

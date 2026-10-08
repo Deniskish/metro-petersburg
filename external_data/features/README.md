@@ -1,7 +1,8 @@
 # Единый контракт внешних признаков
 
-`external_data.features` объединяет готовые результаты `weather`, `calendar`
-и `events` в Pydantic v2 модель `ExternalFeatures`, пригодную для передачи в ML.
+`external_data.features` объединяет готовые результаты `weather`, `calendar`,
+`events` и `railway` в Pydantic v2 модель `ExternalFeatures` для единицы данных
+**station × timestamp**, пригодную для передачи ML-разработчику.
 Модуль сам не получает данные и не вызывает API. Используются зависимости уже
 установленных модулей; дополнительные пакеты не нужны.
 
@@ -14,12 +15,14 @@ from external_data.features import build_external_features
 # weather: WeatherObservation | None
 # calendar: CalendarFeatures для того же момента времени
 # events: list[Event]
+# railway: RailwayFeatures | None для той же станции и момента времени
 result = build_external_features(
     timestamp=timestamp,
     weather=weather,
     calendar=calendar,
     events=events,
-    station=None,
+    station="Площадь Восстания",
+    railway=railway,
 )
 print(result.model_dump_json(indent=2))
 ```
@@ -44,9 +47,42 @@ timestamp и координаты наблюдения не входят во в
   значений нет (включая пустой список), результат `null`. Известный ноль
   сохраняется как `0`. При частично неизвестной посещаемости сумма неполная.
 
-Вызывающий код отвечает за выбор актуальных событий и удаление дубликатов.
-`station` — необязательная метка, а не результат привязки событий к станции.
+Вызывающий код передаёт события, уже отобранные для нужной станции и времени,
+и отвечает за удаление дубликатов. Locations — отдельный вспомогательный модуль:
+его результат используется вызывающим кодом для выбора `events_for_station`.
+Builder не вызывает Geocoder и не определяет принадлежность событий к станции.
+
+Готовый `RailwayFeatures` копируется во вложенный `railway` без пересчёта окон
+и счётчиков. Дублирующие `timestamp` и `metro_station` во вложенный объект не
+включаются. Перед копированием builder требует точного совпадения
+`railway.metro_station == station` и совпадения момента `railway.timestamp`
+с целевым timestamp. Несовпадение вызывает `ValueError`, включая передачу
+railway при `station=None`. Эквивалентные моменты с разными UTC offsets допустимы.
+`minutes_to_next_arrival=None` сохраняется.
+
+Для станции без учитываемого вокзала передавайте `railway=None`. Null также
+может означать, что данные не переданы; это не эквивалент нулевому числу прибытий.
+Старые вызовы builder сохраняются: `station` по-прежнему optional, новый аргумент
+`railway=None` добавлен в конец сигнатуры. Старый JSON без railway можно прочитать;
+новый JSON содержит дополнительный ключ `railway`, в том числе со значением null.
+**Для реального ML рекомендуется `station != null`.**
 Входные объекты не изменяются.
+
+## Граница ответственности
+
+```text
+Passenger flow / lags (отдельный слой)
+                 +
+ExternalFeatures: weather + calendar + events + railway
+                 ↓
+          CatBoost / LightGBM (следующий слой)
+```
+
+Это схема будущего использования данных, а не запуск моделей внутри модуля.
+ExternalFeatures НЕ содержит passenger flow, lags, ML prediction или количество
+составов метро. Эти данные и вычисления добавляются следующими слоями системы.
+Railway описывает прибытия железнодорожных поездов и электричек к вокзалам,
+а не движение составов метро.
 
 ## Локальный пример
 
@@ -57,13 +93,14 @@ python3 -m external_data.features.cli
 ```
 
 CLI использует только фиксированные демонстрационные данные, без ключей и
-сетевых запросов. Погода и календарь в нём не являются реальными наблюдениями
-или проверенным производственным календарём.
+сетевых запросов. Все значения, включая railway Московского вокзала и уже
+отобранные для Площади Восстания события, демонстрационные. Погода, календарь
+и расписание не являются реальными наблюдениями или проверенным календарём.
 
 ```json
 {
   "timestamp": "2026-10-10T18:00:00+03:00",
-  "station": null,
+  "station": "Площадь Восстания",
   "weather": {
     "temperature": 6.0,
     "feels_like": null,
@@ -90,6 +127,16 @@ CLI использует только фиксированные демонст�
     "event_types": ["concert", "festival"],
     "total_expected_people": 1000,
     "has_event": true
+  },
+  "railway": {
+    "railway_name": "Московский вокзал",
+    "arrivals_next_15m": 0,
+    "arrivals_next_30m": 1,
+    "arrivals_next_60m": 3,
+    "arrivals_next_120m": 7,
+    "train_arrivals_next_30m": 1,
+    "suburban_arrivals_next_30m": 0,
+    "minutes_to_next_arrival": 18.0
   }
 }
 ```
