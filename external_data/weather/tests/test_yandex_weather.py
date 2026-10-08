@@ -161,6 +161,14 @@ class WeatherTests(unittest.TestCase):
         self.assertIn("accumulatedPrec", body["query"])
         self.assertNotIn("summary", body["query"])
 
+    def test_past_hours_keep_started_hours_of_today(self):
+        rows = [hour(f"2026-10-07T{h:02d}:00:00+03:00", accumulatedPrec=float(h)) for h in range(8, 16)]
+        result = self.provider(forecast(rows)).get_hourly_forecast(60, 30, 1, past_hours=4)
+        self.assertEqual([item.timestamp.hour for item in result], [9, 10, 11, 12, 13])
+        self.assertEqual([item.precipitation for item in result], [9.0, 10.0, 11.0, 12.0, 13.0])
+        default = self.provider(forecast(rows)).get_hourly_forecast(60, 30, 1)
+        self.assertEqual([item.timestamp.hour for item in default], [13])
+
     def test_midnight_and_timezone_boundary(self):
         payload = forecast([], server="2026-10-07T20:30:00Z")
         payload["data"]["weatherByPoint"]["forecast"]["days"] = [
@@ -279,6 +287,9 @@ class WeatherTests(unittest.TestCase):
         for hours in (0, -1, 49, True, 2.5):
             with self.subTest(hours=hours), self.assertRaises(ValueError):
                 provider.get_hourly_forecast(60, 30, hours)
+        for past_hours in (-1, 25, True, 1.5):
+            with self.subTest(past_hours=past_hours), self.assertRaises(ValueError):
+                provider.get_hourly_forecast(60, 30, past_hours=past_hours)
         self.assertEqual(self.requests, [])
 
     def test_model_timezone_and_finite_values(self):
