@@ -22,6 +22,8 @@ utilsforecast==0.2.17
 coreforecast==0.0.18
 scikit-learn==1.9.1
 scipy==1.18.1
+xgboost==3.4.1           # сравнение моделей (src/compare_models.py)
+statsmodels==0.15.0       # линейная квантильная регрессия там же
 
 # EDA и ноутбуки
 matplotlib==3.11.2

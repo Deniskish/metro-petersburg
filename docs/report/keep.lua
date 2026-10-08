@@ -29,9 +29,12 @@ local function as_tabular(tbl)
   local head = tex:match("\\tabularnewline\n(.-)\\endfirsthead")
   local body = tex:match("\\endlastfoot\n(.-)\\end{longtable}")
   if not (spec and caption and head and body) then return nil end
+  -- широкие таблицы (от 10 колонок) — мельче и с узкими отступами, чтобы помещались на книжной странице
+  local size = #tbl.colspecs >= 10 and "\\scriptsize\\setlength{\\tabcolsep}{3pt}" or
+               "\\footnotesize\\setlength{\\tabcolsep}{4pt}"
   return pandoc.RawBlock("latex", table.concat({
     "\\begin{table}[H]",
-    "\\centering\\footnotesize\\setlength{\\tabcolsep}{4pt}\\renewcommand{\\arraystretch}{1.15}",
+    "\\centering" .. size .. "\\renewcommand{\\arraystretch}{1.15}",
     caption,
     "\\begin{tabular}" .. spec,
     head .. body .. "\\bottomrule\\noalign{}",
@@ -42,7 +45,8 @@ end
 -- высокая текстовая таблица (много текста в ячейках) — пусть остаётся longtable и делится по страницам
 local MAX_CHARS = 1300
 local function compact(tbl)
-  return rows(tbl) <= MAX_ROWS and pandoc.utils.stringify(tbl):len() <= MAX_CHARS
+  local wide = #tbl.colspecs >= 10      -- широкие числовые таблицы — всегда одним блоком мелким шрифтом
+  return rows(tbl) <= MAX_ROWS and (wide or pandoc.utils.stringify(tbl):len() <= MAX_CHARS)
 end
 
 function Blocks(blocks)

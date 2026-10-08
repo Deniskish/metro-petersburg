@@ -242,8 +242,38 @@ def flags() -> None:
     _save(fig, "fig_flags")
 
 
+# --- 7. Сравнение моделей -------------------------------------------------------------
+def compare() -> None:
+    """WAPE моделей на мае–августе (все и аномальные часы) и время обучения — по reports/compare/summary.csv."""
+    path = ROOT / "reports" / "compare" / "summary.csv"
+    if not path.exists():
+        return
+    plt = _plt()
+    s = pd.read_csv(path)
+    s = s.iloc[::-1].reset_index(drop=True)
+    colors = [BLUE if m == "lgbm" else (ORANGE if v == "кандидат в следующую версию" else GRAY)
+              for m, v in zip(s.model, s.verdict)]
+    fig, axes = plt.subplots(1, 3, figsize=(13, 3.9), sharey=True, gridspec_kw={"width_ratios": [1.1, 1.1, 0.9]})
+    y = np.arange(len(s))
+    for ax, col, title, nd in ((axes[0], "wape", "WAPE, все часы, %", 2), (axes[1], "wape_anomaly", "WAPE, аномальные часы, %", 1),
+                               (axes[2], "seconds_per_fold", "обучение, с на фолд", 0)):
+        vals = s[col].to_numpy() * (1 if col == "seconds_per_fold" else 100)
+        ax.barh(y, vals, height=0.6, color=colors)
+        for yy, v in zip(y, vals):
+            ax.text(v * 1.01, yy, f"{v:.{nd}f}".replace(".", ","), va="center", fontsize=9.5, color=INK2)
+        ax.set_xlim(0, vals.max() * 1.22)
+        ax.set_title(title, loc="left", fontsize=12)
+        ax.grid(axis="y", visible=False)
+        _comma(ax.xaxis, 0)
+    axes[0].set_yticks(y, s.label)
+    fig.suptitle("Сравнение моделей на мае–августе (4 фолда): синим — замороженная LightGBM", x=0.01, ha="left",
+                 fontweight="bold", fontsize=13)
+    fig.tight_layout()
+    _save(fig, "fig_compare")
+
+
 def main() -> None:
-    for fn in (system, folds, screening, ablation, calibration, flags):
+    for fn in (system, folds, screening, ablation, calibration, flags, compare):
         fn()
     print(f"рисунки отчёта: {', '.join(sorted(p.name for p in OUT.glob('fig_*.png')))}")
 

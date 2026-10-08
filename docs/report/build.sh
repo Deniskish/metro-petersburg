@@ -21,6 +21,9 @@ pandoc "${COMMON[@]}" --filter pandoc-crossref --lua-filter=code_path.lua --lua-
   -o report.pdf 2> >(grep -v "accessing absolute path" >&2)
 
 # docx: разделы и подписи нумерует pandoc-crossref (приложения — атрибутом label="А")
+echo "== проверка полей PDF"
+"$PY" check_margins.py report.pdf
+
 echo "== docx"
 [ -f reference.docx ] || "$PY" make_reference_docx.py
 pandoc "${COMMON[@]}" -M numberSections=true --filter pandoc-crossref --reference-doc=reference.docx -o report.docx

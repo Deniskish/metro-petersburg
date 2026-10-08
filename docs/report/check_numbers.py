@@ -145,6 +145,20 @@ def build_checks() -> list[tuple[str, str, str]]:
     for h in (1, 2):
         r = scr[(scr.candidate == "share_dev") & (scr.h == h)].iloc[0]
         c.append((f"share_dev, t+{h}", ci(r.dwape, r.dwape_lo, r.dwape_hi), "share_dev" if h == 1 else "t+2"))
+    # --- сравнение моделей (reports/compare)
+    cmp_dir = ROOT / "reports" / "compare"
+    for fname, period in (("summary.csv", "май–август"), ("september.csv", "сентябрь")):
+        sm = pd.read_csv(cmp_dir / fname).set_index("model")
+        for m, label in (("linear", "Линейная КР"), ("catboost", "CatBoost"), ("xgboost", "XGBoost"),
+                         ("lgbm_catboost", "LightGBM + CatBoost")):
+            r = sm.loc[m]
+            c.append((f"сравнение, {period}: {label}, WAPE и ΔWAPE",
+                      f"{pct(r.wape)} | {pct(r.wape_h1)} / {pct(r.wape_h2)}", label))
+            c.append((f"сравнение, {period}: {label}, ΔWAPE к LightGBM", ci(r.d_dwape, r.d_lo, r.d_hi), label))
+        c.append((f"сравнение, {period}: LightGBM", pct(sm.loc["lgbm"].wape), "LightGBM (заморож.)"))
+    sm = pd.read_csv(cmp_dir / "summary.csv").set_index("model")
+    c.append(("сравнение: ансамбль в аномальных часах", ci(sm.loc["lgbm_catboost"].danom_dwape,
+              sm.loc["lgbm_catboost"].danom_lo, sm.loc["lgbm_catboost"].danom_hi), "аномальных"))
     # --- журнал очистки
     rows = int(re.search(r"строк: ([\d,]+);", log).group(1).replace(",", ""))
     total = int(re.search(r"сумма входов: ([\d,]+)", log).group(1).replace(",", ""))
@@ -158,7 +172,7 @@ def build_checks() -> list[tuple[str, str, str]]:
 
 def main() -> int:
     text = REPORT.read_text(encoding="utf-8").replace(" ", " ")
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\s+", " ", text)              # переносы строк в исходнике — как пробелы
     fails = 0
     for what, value, ctx in build_checks():
         variants = {value, value.replace(" [", " п. п. [", 1)}
