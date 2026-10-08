@@ -148,15 +148,21 @@ class YandexWeatherProvider:
         # This is API response time, not a meteorological station measurement time.
         return self._observation({**now, "time": data.get("serverTime")}, point, forecast=False)
 
-    def get_hourly_forecast(self, lat: float, lon: float, hours: int = 2) -> list[WeatherObservation]:
-        """API hour points within [serverTime, serverTime + hours], no interpolation.
+    def get_hourly_forecast(
+        self, lat: float, lon: float, hours: int = 2, *, past_hours: int = 0,
+    ) -> list[WeatherObservation]:
+        """API hour points within [serverTime - past_hours, serverTime + hours], no interpolation.
 
-        The past portion of the current hour is excluded. Missing slots aren't
+        By default (past_hours=0) the past portion of the current hour is excluded.
+        past_hours > 0 also keeps today's already started hours, as the API still
+        forecasts them; days before today aren't requested. Missing slots aren't
         synthesized; fewer samples may be returned if the API has limited data.
         """
         point = self._point(lat, lon)
         if isinstance(hours, bool) or not isinstance(hours, int) or not 1 <= hours <= 48:
             raise ValueError("hours must be an integer in [1, 48]")
+        if isinstance(past_hours, bool) or not isinstance(past_hours, int) or not 0 <= past_hours <= 24:
+            raise ValueError("past_hours must be an integer in [0, 24]")
         query = """query HourlyWeather($point: PointInput!, $days: Int!) {
             serverTime
             weatherByPoint(request: $point) {
@@ -177,7 +183,7 @@ class YandexWeatherProvider:
                 raise YandexWeatherError("Yandex Weather: отсутствует список forecast.days[].hours.")
             for row in rows:
                 observation = self._observation(self._object(row, "hours[]"), point, forecast=True)
-                if server_time <= observation.timestamp <= server_time + timedelta(hours=hours):
+                if server_time - timedelta(hours=past_hours) <= observation.timestamp <= server_time + timedelta(hours=hours):
                     observations.append(observation)
         observations.sort(key=lambda item: item.timestamp)
         if len({item.timestamp for item in observations}) != len(observations):
