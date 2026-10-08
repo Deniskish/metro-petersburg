@@ -117,6 +117,20 @@ SPB_EVENTS_CSV = REFERENCE / "events_spb.csv"
 LINE1_OPERATIONS_YAML = REFERENCE / "line1_operations.yaml"
 
 SPB_HOURLY = INTERIM / "spb_line1_hourly.parquet"
+
+# 15-минутные файлы (этап 6): лист на сутки метро, 96 слотов 03:00 … 02:45, метка — начало интервала
+SPB_15MIN_GLOB = "Входные пассажиропотоки Линия 1 * 2026 по 15-мин.xlsx"
+SPB_15MIN_SLOTS = 96
+SPB_15MIN_DAY_START = pd.Timedelta(hours=3)        # первый слот листа: сутки метро в файле начинаются в 03:00
+SPB_VESTIBULES_15MIN_CSV = REFERENCE / "spb_line1_vestibules_15min.csv"
+SPB_15MIN = INTERIM / "spb_line1_15min.parquet"
+SPB_15MIN_RECON = INTERIM / "spb_line1_15min_reconciliation.parquet"   # час × вестибюль: Σ 4 слотов против часового файла
+# Расхождение источников в часе, после которого час помечается is_source_mismatch: |Σ15 − час| > max(ABS; REL × час)
+SPB_15MIN_MISMATCH_ABS = 100
+SPB_15MIN_MISMATCH_REL = 0.2
+# Частичное закрытие: слот с входом ≤ max(SPB_CLOSURE_MAX_ENTRIES; SHARE × медиана слота) при медиане ≥ SPB_CLOSURE_MIN_NORM.
+# Доля нужна для больших вестибюлей: в закрытый вход проходят 3–6 человек за 15 минут (Балтийская, 11.02 и 27.02).
+SPB_15MIN_SLOT_CLOSED_SHARE = 0.02
 MO1_OUT = INTERIM / "mo1_reports.parquet"
 
 # Погода СПб: даты в GMT — 00–02 MSK 1 января приходятся на 31 декабря UTC
