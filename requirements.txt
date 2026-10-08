@@ -24,6 +24,7 @@ scikit-learn==1.9.1
 scipy==1.18.1
 xgboost==3.4.1           # сравнение моделей (src/compare_models.py)
 statsmodels==0.15.0       # линейная квантильная регрессия там же
+torch==2.14.1             # GRU для прогноза каждые 30 минут (src/stack/nn.py), CPU
 
 # внешние данные (external_data/, Денис): диапазоны версий — в external_data/*/requirements.txt,
 # здесь — точные версии из общего окружения; pydantic — выше

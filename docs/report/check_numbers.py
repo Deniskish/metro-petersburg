@@ -161,6 +161,8 @@ def build_checks() -> list[tuple[str, str, str]]:
               sm.loc["lgbm_catboost"].danom_lo, sm.loc["lgbm_catboost"].danom_hi), "аномальных"))
     # --- 15-минутные данные (reports/intrahour, logs/clean_spb_15min.log)
     c += intrahour_checks()
+    # --- прогноз каждые 30 минут: стекинг (reports/stack)
+    c += stack_checks()
     # --- журнал очистки
     rows = int(re.search(r"строк: ([\d,]+);", log).group(1).replace(",", ""))
     total = int(re.search(r"сумма входов: ([\d,]+)", log).group(1).replace(",", ""))
@@ -221,6 +223,57 @@ def intrahour_checks() -> list[tuple[str, str, str]]:
     c += [("15 мин: U днём", pct(w(work, "U"), 1), "07–22"),
           ("15 мин: U вокзалов, рабочий", f"{pct(w(hub[hub.hub & (hub.day3 == 'рабочий')], 'U'), 1)} против "
                                           f"{pct(w(hub[~hub.hub & (hub.day3 == 'рабочий')], 'U'), 1)}", "Профиль чуть")]
+    return c
+
+
+def stack_checks() -> list[tuple[str, str, str]]:
+    """Числа раздела «Прогноз каждые 30 минут: стекинг»."""
+    d = ROOT / "reports" / "stack"
+    cm, cd = pd.read_csv(d / "cross_metrics.csv"), pd.read_csv(d / "cross_delta.csv")
+    sm, sd = pd.read_csv(d / "september_metrics.csv"), pd.read_csv(d / "september_delta.csv")
+    w = pd.read_csv(d / "weights.csv")
+    sel = pd.read_csv(d / "selection.csv")
+    run = json.loads((d / "september_run.json").read_text(encoding="utf-8"))
+    demo = pd.read_csv(d / f"demo_{pd.Timestamp(run['demo_day']):%d%m}.csv")
+    choice = pd.read_csv(d / "demo_choice.csv")
+    cross, may, jul, sep = ("май + июль (вне выборки)", "май (стекинг обучен на июле)",
+                            "июль (стекинг обучен на мае)", "сентябрь")
+    labels = {"b1": "B1: часовая LightGBM", "b2": "B2: персистентность", "b3": "B3: GRU", "mean": "Среднее B1–B3",
+              "stack": "Стекинг"}
+
+    def m(df, period, model, h="все", col="wape", sl="все слоты"):
+        r = df[(df.period == period) & (df.model == model) & (df.horizon.astype(str) == h) & (df.slice == sl)]
+        return float(r[col].iloc[0])
+
+    def dl(df, period, h="все", sl="все слоты"):
+        r = df[(df.period == period) & (df.vs == "B1") & (df.horizon.astype(str) == h) & (df.slice == sl)].iloc[0]
+        return ci(r.dwape, r.lo, r.hi)
+
+    c = []
+    for model in ("b1", "b2", "b3", "mean"):
+        row = " | ".join(pct(m(cm, cross, model, str(h))) for h in (30, 60, 90, 120, "все"))
+        c.append((f"стекинг: WAPE {model}, май + июль", f"{row} | {pct(m(cm, cross, model, col='coverage'), 1)}",
+                  labels[model]))
+    for h in (30, 60, 90, 120, "все"):
+        c.append((f"стекинг: WAPE стекинга, {h}", pct(m(cm, cross, "stack", str(h))), "Стекинг"))
+    c.append(("стекинг: покрытие", pct(m(cm, cross, "stack", col="coverage"), 1), "Стекинг"))
+    c.append(("стекинг: строк май + июль", num(int(m(cm, cross, "stack", col="n"))), "185"))
+    for period, df in ((cross, cd), (may, cd), (jul, cd), (sep, sd)):
+        c.append((f"стекинг: ΔWAPE к B1, все, {period}", dl(df, period), "Все слоты"))
+        c.append((f"стекинг: ΔWAPE к B1, 30 мин, {period}", dl(df, period, "30"), "Горизонт 30"))
+        c.append((f"стекинг: ΔWAPE к B1, 120 мин, {period}", dl(df, period, "120"), "Горизонт 120"))
+        c.append((f"стекинг: ΔWAPE к B1, аномальные, {period}", dl(df, period, sl="аномальные часы"), "Аномальные"))
+    c += [("стекинг: сентябрь, стекинг и B1",
+           f"{pct(m(sm, sep, 'stack'))} против {pct(m(sm, sep, 'b1'))}", "Сентябрь"),
+          ("стекинг: выбранный вариант весов", "по горизонту" if sel[sel.chosen].variant.iloc[0] == "V1" else "?",
+           "простейший")]
+    wq = w[(w.fit == "май + июль") & (w.level == "горизонт") & (w["quantile"] == "q50")].sort_values("cell")
+    c.append(("стекинг: веса B1 в q50", " / ".join(f2(x) for x in wq.w_b1), "q50"))
+    line = demo[(demo.place == "вся линия") & (demo.k == 1)]
+    wp = lambda col: (line[col] - line.y).abs().sum() / line.y.sum()
+    c += [("стекинг: демо, линия", f"{pct(wp('stack'))}, B1 — на {pct(wp('b1'))}, норма — на {pct(wp('n'))}",
+           "По линии"),
+          ("стекинг: демо, отклонение вечера", pct(choice.dev.abs().max(), 1), "07.09")]
     return c
 
 
