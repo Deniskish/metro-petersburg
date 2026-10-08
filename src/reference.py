@@ -9,6 +9,8 @@ from src import config
 
 STATION_COLS = ["station_id", "name", "name_external", "line_order", "n_vestibules", "has_data"]
 VESTIBULE_COLS = ["vestibule_id", "raw_name", "station_id", "vestibule_no", "closes_early", "first_hour", "last_hour"]
+VESTIBULE_15MIN_COLS = ["raw_name_15min", "vestibule_id", "station_id", "vestibule_no", "in_hourly", "first_hour",
+                        "last_hour"]
 INCIDENT_COLS = ["incident_id", "vestibule_id", "start_local", "end_local", "description", "source"]
 EVENT_COLS = ["event", "start_local", "end_local", "venue", "nearest_station_id", "source", "verified"]
 ALL_VESTIBULES = "*"  # vestibule_id в incidents.csv: вся линия
@@ -81,6 +83,37 @@ def load_vestibules(path: Path = config.SPB_VESTIBULES_CSV, stations: pd.DataFra
         raise ValueError(f"{path.name}: first_hour позже last_hour")
     if not (df.closes_early == (df.last_hour != 0)).all():
         raise ValueError(f"{path.name}: closes_early должен совпадать с last_hour != 0")
+    order = stations.set_index("station_id").line_order
+    return (df.assign(_o=df.station_id.map(order)).sort_values(["_o", "vestibule_no"])
+              .drop(columns="_o").reset_index(drop=True))
+
+
+def load_vestibules_15min(path: Path = config.SPB_VESTIBULES_15MIN_CSV, vestibules: pd.DataFrame | None = None,
+                          stations: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Названия вестибюлей в 15-минутных файлах (этап 6). in_hourly=false — вестибюля нет в часовом файле
+    (Технологический институт): его режим работы задан здесь, у остальных обязан совпасть со справочником вестибюлей."""
+    stations = load_stations() if stations is None else stations
+    vestibules = load_vestibules(stations=stations) if vestibules is None else vestibules
+    df = _read(path, VESTIBULE_15MIN_COLS, ["raw_name_15min", "vestibule_id", "station_id"])
+    _bool(df, "in_hourly", path)
+    for col in ("raw_name_15min", "vestibule_id"):
+        _unique(df, col, path)
+    unknown = set(df.station_id) - set(stations.station_id)
+    if unknown:
+        raise ValueError(f"{path.name}: неизвестные station_id: {sorted(unknown)}")
+    known = vestibules.set_index("vestibule_id")
+    hourly = df[df.in_hourly].set_index("vestibule_id")
+    if set(hourly.index) != set(known.index):
+        raise ValueError(f"{path.name}: in_hourly=true должен быть ровно у вестибюлей {config.SPB_VESTIBULES_CSV.name}: "
+                         f"лишние {sorted(set(hourly.index) - set(known.index))}, "
+                         f"нет {sorted(set(known.index) - set(hourly.index))}")
+    cols = ["station_id", "vestibule_no", "first_hour", "last_hour"]
+    off = hourly[cols].ne(known.loc[hourly.index, cols]).any(axis=1)
+    if off.any():
+        raise ValueError(f"{path.name}: {cols} не совпадают со справочником вестибюлей: {sorted(hourly.index[off])}")
+    for col in ("first_hour", "last_hour"):
+        if df[col].isin(config.SPB_CLOSED_HOURS).any() or not df[col].between(0, 23).all():
+            raise ValueError(f"{path.name}: {col} должен быть часом работы метро")
     order = stations.set_index("station_id").line_order
     return (df.assign(_o=df.station_id.map(order)).sort_values(["_o", "vestibule_no"])
               .drop(columns="_o").reset_index(drop=True))

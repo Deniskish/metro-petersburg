@@ -159,6 +159,8 @@ def build_checks() -> list[tuple[str, str, str]]:
     sm = pd.read_csv(cmp_dir / "summary.csv").set_index("model")
     c.append(("сравнение: ансамбль в аномальных часах", ci(sm.loc["lgbm_catboost"].danom_dwape,
               sm.loc["lgbm_catboost"].danom_lo, sm.loc["lgbm_catboost"].danom_hi), "аномальных"))
+    # --- 15-минутные данные (reports/intrahour, logs/clean_spb_15min.log)
+    c += intrahour_checks()
     # --- журнал очистки
     rows = int(re.search(r"строк: ([\d,]+);", log).group(1).replace(",", ""))
     total = int(re.search(r"сумма входов: ([\d,]+)", log).group(1).replace(",", ""))
@@ -167,6 +169,58 @@ def build_checks() -> list[tuple[str, str, str]]:
                        ("вестибюль закрыт: режим", "по режиму"), ("инцидент", "инцидент")):
         n = int(re.search(rf"{re.escape(label)}\s+(\d+)", log).group(1))
         c.append((f"флаг «{label}»: строк", num(n), ctx))
+    return c
+
+
+def intrahour_checks() -> list[tuple[str, str, str]]:
+    """Числа раздела «Данные по 15 минут и ранний сигнал»."""
+    d = ROOT / "reports" / "intrahour"
+    log = (ROOT / "logs" / "clean_spb_15min.log").read_text(encoding="utf-8")
+    summ = pd.read_csv(d / "reconciliation_summary.csv")
+    line = summ[summ.slice == "вся линия"].iloc[0]
+    month = summ[summ.slice == "месяц"]
+    ves = summ[summ.slice == "вестибюль"].set_index("key")
+    fc = pd.read_csv(d / "signal_forecast.csv")
+    dl = pd.read_csv(d / "signal_forecast_delta.csv")
+    det = pd.read_csv(d / "detection_by_minute.csv")
+    m0 = pd.read_csv(d / "detection_minute0.csv").set_index("period")
+    cs = pd.read_csv(d / "detection_c.csv")
+    cells = pd.read_csv(d / "profile_cells.csv")
+    sel_p, sep_p = "фев + май + июль", "сентябрь"
+    w = lambda df, col: (df[col] * df.total).sum() / df.total.sum()
+
+    c = [("15 мин: строк", num(int(re.search(r"строк: ([\d,]+) =", log).group(1).replace(",", ""))), "строк"),
+         ("15 мин: входов", num(int(re.search(r"сумма входов: ([\d,]+)", log).group(1).replace(",", ""))), "входов"),
+         ("15 мин: точное совпадение", pct(line.exact_share, 1), "Точное совпадение"),
+         ("15 мин: превышение источника", pct(line.excess), "выше часового"),
+         ("15 мин: превышение по месяцам", f"+{pct(month.excess.min())[:-2]}…+{pct(month.excess.max())}", "по месяцам"),
+         ("15 мин: превышение, мин. вестибюль", pct(ves.loc["vosstaniya_2"].excess), "Восстания-2"),
+         ("15 мин: превышение, макс. вестибюль", pct(ves.loc["leninsky_prospekt_2"].excess), "Ленинский пр.-2"),
+         ("15 мин: выбросов", f"{int(line.mismatch_hours) + 2} ч", "Выбросы")]
+    sel = lambda p: fc[fc.period == p].set_index("label")
+    for label, ctx in (("минута 0: норма b4", "норма b4"), ("минута 0: b × уровень × r(t)", "уровень × r(t)"),
+                       ("15 мин: b4 · r_1", "r_1"), ("30 мин: b4 · r_2", "r_2"), ("45 мин: b4 · r_3", "r_3"),
+                       ("60 мин: b4 · r_4", "весь час")):
+        c.append((f"15 мин: WAPE «{label}»", f"{pct(sel(sel_p).loc[label].wape)} | {pct(sel(sep_p).loc[label].wape)}", ctx))
+    c.append(("15 мин: WAPE модели t+1", pct(sel(sel_p).loc["минута 0: модель t+1 (q50)"].wape), "модель t+1"))
+    dm = dl[dl.b == "f_model"].set_index("a")
+    c += [("15 мин: ΔWAPE r_1 к модели", ci(dm.loc["r1"].delta_wape, dm.loc["r1"].lo, dm.loc["r1"].hi), "модел"),
+          ("15 мин: ΔWAPE r_2 к модели", ci(dm.loc["r2"].delta_wape, dm.loc["r2"].lo, dm.loc["r2"].hi), "модел"),
+          ("15 мин: WAPE r_2 и модели на тех же строках",
+           f"{pct(dm.loc['r2'].wape_a)} против {pct(dm.loc['r2'].wape_b)}", "тех же строках"),
+          ("15 мин: c_k", " / ".join(f2(x) for x in cs.c_f1), "c =")]
+    for p_, ctx_r, ctx_p in ((sel_p, "Найдено аномальных", "Точность поднятых"), (sep_p, "Найдено, сентябрь",
+                                                                                  "Точность, сентябрь")):
+        dd = det[det.period == p_]
+        c.append((f"15 мин: найдено, {p_}", " | ".join([pct(m0.loc[p_].recall, 0), *(pct(x, 0) for x in dd.recall)]), ctx_r))
+        c.append((f"15 мин: точность, {p_}",
+                  " | ".join([pct(m0.loc[p_].precision, 0), *(pct(x, 0) for x in dd.precision)]), ctx_p))
+    wd = cells[cells.day3 == "рабочий"]
+    work = wd[wd.hour.isin(range(7, 23))]
+    hub = cells[cells.hour.isin([*range(6, 24), 0])]
+    c += [("15 мин: U днём", pct(w(work, "U"), 1), "07–22"),
+          ("15 мин: U вокзалов, рабочий", f"{pct(w(hub[hub.hub & (hub.day3 == 'рабочий')], 'U'), 1)} против "
+                                          f"{pct(w(hub[~hub.hub & (hub.day3 == 'рабочий')], 'U'), 1)}", "Профиль чуть")]
     return c
 
 
