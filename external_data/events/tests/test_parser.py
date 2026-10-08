@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from external_data.events.models import StructuredEventExtractionResult
 from external_data.events import Event, EventExtractionResult, EventParser, parse_events
 from external_data.events.providers import FakeLLMProvider
 
@@ -89,7 +90,7 @@ class ParserTests(unittest.TestCase):
         envelope = json.loads(provider.call["user_prompt"])
         self.assertEqual(envelope["text"], text)
         self.assertEqual(envelope["published_at"], "2026-10-08T02:30:00+03:00")
-        self.assertEqual(provider.call["json_schema"], EventExtractionResult.model_json_schema())
+        self.assertEqual(provider.call["json_schema"], StructuredEventExtractionResult.model_json_schema())
         self.assertIn("недоверенные", provider.call["system_prompt"])
 
     def test_source_metadata_is_authoritative(self):

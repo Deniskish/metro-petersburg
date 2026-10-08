@@ -14,6 +14,7 @@
           "start_time": "2026-10-07T19:30:00+03:00",
           "end_time": null,
           "location_name": "Газпром Арена",
+          "address": null,
           "expected_people": 50000,
           "source_type": null,
           "source_url": null,
@@ -39,6 +40,7 @@
           "start_time": null,
           "end_time": null,
           "location_name": "Ледовый дворец",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -64,6 +66,7 @@
           "start_time": null,
           "end_time": null,
           "location_name": "Дворцовая площадь",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -100,6 +103,7 @@
           "start_time": null,
           "end_time": null,
           "location_name": "Ледовый дворец",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -125,6 +129,7 @@
           "start_time": "2026-10-08T20:00:00+03:00",
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -150,6 +155,7 @@
           "start_time": "2026-10-07T18:00:00+03:00",
           "end_time": null,
           "location_name": "Клуб",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -163,6 +169,7 @@
           "start_time": "2026-10-08T12:00:00+03:00",
           "end_time": null,
           "location_name": "Парк",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -188,6 +195,7 @@
           "start_time": "2026-10-10T20:00:00+03:00",
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -224,6 +232,7 @@
           "start_time": "2026-10-08T19:00:00+03:00",
           "end_time": null,
           "location_name": "Ледовый дворец",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -249,6 +258,7 @@
           "start_time": "2026-10-08T19:00:00+03:00",
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -274,6 +284,7 @@
           "start_time": null,
           "end_time": null,
           "location_name": "Клуб",
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -299,6 +310,7 @@
           "start_time": null,
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -324,6 +336,7 @@
           "start_time": "2026-10-08T19:00:00+03:00",
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -349,6 +362,7 @@
           "start_time": null,
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -374,6 +388,7 @@
           "start_time": "2026-10-06T19:00:00+03:00",
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
@@ -399,12 +414,119 @@
           "start_time": "2026-10-09T19:00:00+03:00",
           "end_time": null,
           "location_name": null,
+          "address": null,
           "expected_people": null,
           "source_type": null,
           "source_url": null,
           "published_at": null,
           "confidence": 0.95,
           "source_fragment": "В пятницу в 19:00 состоится концерт."
+        }
+      ]
+    }
+  },
+  {
+    "id": "separate_concert_occurrences",
+    "text": "Сергей Лазарев выступит на СКА Арене 9 октября в 20:00. Концерты также пройдут 10 и 11 октября в 19:00.",
+    "published_at": "2026-10-07T12:00:00+03:00",
+    "source_type": "telegram",
+    "source_url": null,
+    "response": {
+      "is_event": true,
+      "events": [
+        {
+          "event_name": "Сергей Лазарев",
+          "event_type": "concert",
+          "start_time": "2026-10-09T20:00:00+03:00",
+          "end_time": null,
+          "location_name": "СКА Арена",
+          "address": null,
+          "expected_people": null,
+          "source_type": null,
+          "source_url": null,
+          "published_at": null,
+          "confidence": null,
+          "source_fragment": "Сергей Лазарев выступит на СКА Арене 9 октября в 20:00."
+        },
+        {
+          "event_name": "Сергей Лазарев",
+          "event_type": "concert",
+          "start_time": "2026-10-10T19:00:00+03:00",
+          "end_time": null,
+          "location_name": "СКА Арена",
+          "address": null,
+          "expected_people": null,
+          "source_type": null,
+          "source_url": null,
+          "published_at": null,
+          "confidence": null,
+          "source_fragment": "Концерты также пройдут 10 и 11 октября в 19:00."
+        },
+        {
+          "event_name": "Сергей Лазарев",
+          "event_type": "concert",
+          "start_time": "2026-10-11T19:00:00+03:00",
+          "end_time": null,
+          "location_name": "СКА Арена",
+          "address": null,
+          "expected_people": null,
+          "source_type": null,
+          "source_url": null,
+          "published_at": null,
+          "confidence": null,
+          "source_fragment": "Концерты также пройдут 10 и 11 октября в 19:00."
+        }
+      ]
+    }
+  },
+  {
+    "id": "match_unspecified_sport",
+    "text": "12 октября в 19:30 на СКА Арене пройдет матч Шанхай Дрэгонс — Динамо Минск",
+    "published_at": "2026-10-07T12:00:00+03:00",
+    "source_type": "telegram",
+    "source_url": null,
+    "response": {
+      "is_event": true,
+      "events": [
+        {
+          "event_name": "Шанхай Дрэгонс — Динамо Минск",
+          "event_type": "sport_event",
+          "start_time": "2026-10-12T19:30:00+03:00",
+          "end_time": null,
+          "location_name": "СКА Арена",
+          "address": null,
+          "expected_people": null,
+          "source_type": null,
+          "source_url": null,
+          "published_at": null,
+          "confidence": null,
+          "source_fragment": "12 октября в 19:30 на СКА Арене пройдет матч Шанхай Дрэгонс — Динамо Минск"
+        }
+      ]
+    }
+  },
+  {
+    "id": "explicit_concert_end",
+    "text": "Концерт пройдет 12 октября с 19:00 до 22:30.",
+    "published_at": "2026-10-07T12:00:00+03:00",
+    "source_type": "telegram",
+    "source_url": null,
+    "response": {
+      "is_event": true,
+      "events": [
+        {
+          "event_name": "Концерт",
+          "event_type": "concert",
+          "start_time": "2026-10-12T19:00:00+03:00",
+          "end_time": "2026-10-12T22:30:00+03:00",
+          "location_name": null,
+          "address": null,
+          "expected_people": null,
+          "source_type": null,
+          "source_url": null,
+          "published_at": null,
+          "confidence": null,
+          "source_fragment": "Концерт пройдет 12 октября с 19:00 до 22:30."
         }
       ]
     }
