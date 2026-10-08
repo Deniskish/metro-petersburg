@@ -5,6 +5,70 @@
 - [ML-часть](#ml-часть-прогноз-входов) — прогноз входов на станции (`src/`, Макар);
 - [внешние данные](#внешние-данные-external_data) — погода, календарь, события, ж/д расписания (`external_data/`, Денис).
 
+## Как устроен репозиторий
+
+| Папка / файл | Что | Отвечает |
+|---|---|---|
+| `src/` | ML: очистка, признаки, модель, бэктест, прогноз ([src/serve.py](src/serve.py)) | Макар |
+| `tests/` | тесты ML и переходника (pytest) | Макар |
+| `docs/` | ТЗ, EDA, бэктест, карточка модели, ход работ, отчёт | Макар |
+| `data/reference/` | ручные справочники 1 линии: станции, вестибюли, события, инциденты | Макар |
+| `notebooks/`, `reports/` | EDA, таблицы и графики бэктеста | Макар |
+| `external_data/` | внешние данные: погода, календарь, события, геокодер, ж/д расписания; тесты — в `*/tests/` (unittest) | Денис |
+| `scripts/`, `.env.example` | smoke-проверка внешних API, шаблон ключей | Денис |
+| [src/external_adapter.py](src/external_adapter.py), колонка `name_external` в [станциях](data/reference/spb_line1_stations.csv) | стык: external_data → прогноз | Макар, правки — вместе с Денисом |
+
+`data/raw/`, `data/interim/`, `models/` в git не хранятся: данные и модели собираются командами из раздела
+[«Как получить прогноз»](#как-получить-прогноз).
+
+```text
+external_data.weather   ── осадки (Яндекс Погода) ────────┐
+external_data.railway   ── прибытия поездов (Расписания) ─┤
+external_data.events    ── события из текстов ────────────┤
+external_data.locations ── ближайшие станции к площадкам ─┘
+                                   ↓
+                      src/external_adapter.py
+                        осадки → тот же признак модели; поезда и события → context
+                                   ↓
+                      src/serve.py: forecast(now)
+                        records (контракт) · explanations (причины + context) · meta
+```
+
+Модель обучена на потоке, календаре и историческом прогнозе осадков Open-Meteo. Погода Яндекса подставляется в тот же
+признак осадков. Поезда и события в модель не подаются, потому что она на них не обучена: они идут в
+`explanations[].context` как материал для LLM-слоя. Замороженную модель переходник не меняет.
+
+Установка обеих частей одной командой (Python 3.12, `external_data` требует 3.11+):
+
+```bash
+pip install -r requirements.txt
+```
+
+Тесты, без сети и ключей:
+
+```bash
+pytest -q                     # ML и переходник (tests/); тесты на data/interim и models/ пропускаются, если их нет
+python -m unittest discover   # external_data
+```
+
+## Ключи API
+
+Ключи передаются только через переменные окружения. Локальный `.env` (шаблон — [.env.example](.env.example)) в git не
+попадает (`.gitignore`) и сам не загружается: перед запуском выполните `set -a; source .env; set +a`. ML-часть работает
+без ключей: Open-Meteo и производственный календарь их не требуют. Ключи нужны только для живых внешних данных.
+Тестам обеих частей ключи не нужны.
+
+| Переменная | Сервис | Кто читает | Если не задана |
+|---|---|---|---|
+| `YANDEX_WEATHER_API_KEY` | Яндекс Погода | `serve.forecast` для «сейчас», `external_data.weather` | погода Open-Meteo, предупреждение в `meta.weather.warning` |
+| `YANDEX_RASP_API_KEY` | Яндекс Расписания | `serve.forecast` для «сейчас» (`context.railway`), `external_data.railway` | `context.railway = null` |
+| `YANDEX_GEOCODER_API_KEY` | Геокодер Яндекс Карт | `external_data.locations`, `external_adapter.locate_events` | события не привязываются к станциям |
+| `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`, `YANDEX_MODEL` | YandexGPT | `external_data.events` — события из текста | события не извлекаются |
+| `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | OpenRouter | `external_data.events --provider openrouter` | для Яндекса не нужны |
+
+Ключи разных сервисов разные: ключ YandexGPT для Погоды не подходит. Подробнее о получении ключей — в README модулей
+`external_data/*`.
+
 ## ML-часть: прогноз входов
 
 ML-часть проекта: прогноз входов на 18 станций 1 линии на 1 и 2 часа вперёд с интервалом q10–q90, флагом аномалии
@@ -79,6 +143,41 @@ serve.table(fc)   # всё одной таблицей
 Раньше 30.04 подходящей модели нет. Тогда используется `lgbm_final` с предупреждением «модель видела этот период»
 в `meta.warning`: её веса обучены на более поздних данных. Модель можно задать и явно: `--model lgbm_final`.
 
+**Погода.** `--weather` / `weather_source`: `auto` (по умолчанию), `openmeteo`, `yandex`. В `auto` для «сейчас» (`now`
+в пределах часа от текущего времени) берётся прогноз Яндекс Погоды, для прошлых `now` — исторический прогноз
+Open-Meteo, как при обучении. Без `YANDEX_WEATHER_API_KEY` или при ошибке API используется Open-Meteo с
+предупреждением в `meta.weather.warning`.
+
+Признаки модели — осадки за час до слота τ и за 3 часа до него: Open-Meteo метит час его концом, Яндекс — началом,
+переходник сдвигает часы Яндекса на 1 ч. Для слотов 09 и 10 нужны часы 06–10, а к 08:59 они уже начались. Поэтому из
+Яндекса берётся и прошедшая часть сегодняшнего прогноза (`past_hours`). Часы, которых Яндекс не дал, берутся
+из Open-Meteo; источник каждого часа записан в `meta.weather.hours`.
+
+Режим «сейчас» пока проверяется только тестами: поток в `data/interim` заканчивается 29.09, а живого потока нет.
+`forecast()` на сегодняшнюю дату отвечает «вне периода данных».
+
+```bash
+python -m src.serve --now "2026-08-31 08:59" --weather yandex   # без ключа: Open-Meteo и предупреждение
+```
+
+**Контекст для LLM-слоя.** Поезда и события модель не видит, они передаются в `explanations[].context`:
+
+```python
+from external_data.locations import YandexGeocoderProvider
+from external_data.railway import YandexRaspProvider
+from src import external_adapter as A
+
+located, skipped = A.locate_events(events, YandexGeocoderProvider())   # events — list[Event] из external_data.events
+fc = serve.forecast(now, railway_provider=YandexRaspProvider(), events=located)
+```
+
+- Поезда — для 4 станций с вокзалом (Площадь Восстания, Площадь Ленина, Балтийская, Девяткино), на начало слота.
+  `arrivals_next_60m` — прибытия за час слота. Для «сейчас» без провайдера Rasp подключается сам, если задан
+  `YANDEX_RASP_API_KEY`.
+- События — станция среди ближайших к площадке не дальше 1,5 км, слот — от начала события − 3 ч до его конца
+  (или начала) + 3 ч. Это эвристика для контекста (`EVENT_RADIUS_M`, `EVENT_WINDOW`), а не признак модели.
+- Ошибки этих источников прогноз не роняют: они пишутся в `meta.context.warning`.
+
 #### 4. Формат выхода
 
 `records` — список записей контракта ([src/contract.py](src/contract.py)). Пример — `--now "2026-08-31 08:59"`,
@@ -108,12 +207,37 @@ serve.table(fc)   # всё одной таблицей
 
 `effect_pct` — на сколько процентов признак сдвинул прогноз q50 относительно среднего прогноза модели.
 
-`meta` — какая модель отвечала:
+`context` — поезда и события рядом (пример: Площадь Восстания, слот 09:00, переданы провайдер поездов и событие):
+
+```json
+{"railway": {"timestamp": "2026-08-31T09:00:00+03:00", "railway_name": "Московский вокзал",
+             "arrivals_next_15m": 0, "arrivals_next_30m": 1, "arrivals_next_60m": 3, "arrivals_next_120m": 3,
+             "train_arrivals_next_30m": 1, "suburban_arrivals_next_30m": 0, "minutes_to_next_arrival": 18.0},
+ "events": [{"event_name": "Barcelona Flamenco Ballet", "event_type": "concert",
+             "start_time": "2026-08-31T11:30:00+03:00", "end_time": null, "location_name": "БКЗ Октябрьский",
+             "expected_people": null, "source_url": null, "distance_m": 151}]}
+```
+
+Если источник не подключён или у станции нет вокзала, будет `{"railway": null, "events": []}`. Поля `railway` взяты
+из контракта `RailwayFeatures` external_data.
+
+`meta` — какая модель отвечала, откуда погода и какие внешние источники подключены:
 
 ```json
 {"model": "lgbm_holdout", "train_start": "2026-02-09", "train_end": "2026-08-24", "out_of_sample": true,
- "warning": null, "now": "2026-08-31 08:59:00", "t0": "2026-08-31T08:00:00+03:00", "config_sha256": "2152d675…"}
+ "warning": null, "now": "2026-08-31 08:59:00", "t0": "2026-08-31T08:00:00+03:00", "config_sha256": "2152d675…",
+ "weather": {"requested": "auto", "source": "openmeteo", "warning": null,
+             "hours": {"2026-08-31T06:00:00+03:00": "openmeteo", "2026-08-31T07:00:00+03:00": "openmeteo",
+                       "2026-08-31T08:00:00+03:00": "openmeteo", "2026-08-31T09:00:00+03:00": "openmeteo"},
+             "features": [{"ts": "2026-08-31T09:00:00+03:00", "fc_precip_tau": 0.0, "fc_precip_3h_tau": 0.6},
+                          {"ts": "2026-08-31T10:00:00+03:00", "fc_precip_tau": 0.0, "fc_precip_3h_tau": 0.4}]},
+ "context": {"railway": null, "events": 0, "warning": null}}
 ```
+
+- `weather.source` — `openmeteo`, `yandex` или `yandex+openmeteo` (часть часов из каждого источника).
+- `weather.hours` — начало часа осадков → источник: `yandex`, `openmeteo` или `нет данных`.
+- `weather.features` — признаки погоды, которые видела модель, по слотам.
+- `context.railway` — имя провайдера поездов или `null`; `context.events` — сколько событий передано.
 
 Время ответа — около 2 секунд: нормы и признаки пересчитываются по данным до `now`.
 
