@@ -1,0 +1,33 @@
+% Преамбула PDF для защиты (pandoc + XeTeX): заголовки PT Sans, мелкий шрифт таблиц, крупные разделы с новой страницы.
+\usepackage{etoolbox}
+\usepackage{needspace}
+\usepackage{titlesec}
+\usepackage{xurl}
+\usepackage{newunicodechar}
+\usepackage{fvextra}
+\usepackage{float}
+\usepackage[font=small,labelfont=bf,labelsep=endash,justification=centering]{caption}
+\titleformat{\section}{\normalfont\sffamily\Large\bfseries}{}{0em}{}
+\titleformat{\subsection}{\normalfont\sffamily\large\bfseries}{}{0em}{}
+\titleformat{\subsubsection}{\normalfont\sffamily\normalsize\bfseries}{}{0em}{}
+\titlespacing*{\section}{0pt}{3ex plus 1ex minus .3ex}{1.4ex plus .3ex}
+\titlespacing*{\subsection}{0pt}{2.6ex plus 1ex minus .2ex}{1ex plus .2ex}
+\titlespacing*{\subsubsection}{0pt}{2ex plus .8ex minus .2ex}{0.8ex plus .2ex}
+\pretocmd{\section}{\clearpage}{}{}
+\pretocmd{\subsection}{\needspace{9\baselineskip}}{}{}
+\AtBeginDocument{\apptocmd{\maketitle}{\thispagestyle{empty}\clearpage}{}{}}
+\AtBeginEnvironment{longtable}{\footnotesize\setlength{\tabcolsep}{4pt}\renewcommand{\arraystretch}{1.15}}
+\setlength{\emergencystretch}{3em}
+\widowpenalty=10000
+\clubpenalty=10000
+% символы, которых нет в PT Serif / PT Sans / PT Mono, — из STIXGeneral
+\newfontfamily\fallbackfont{STIXGeneral}
+\newunicodechar{Σ}{{\fallbackfont\upshape Σ}}
+\newunicodechar{α}{{\fallbackfont\upshape α}}
+\newunicodechar{τ}{{\fallbackfont\upshape τ}}
+\newunicodechar{→}{{\fallbackfont\upshape →}}
+\newunicodechar{≠}{{\fallbackfont\upshape ≠}}
+\newunicodechar{≥}{{\fallbackfont\upshape ≥}}
+\newunicodechar{≤}{{\fallbackfont\upshape ≤}}
+\newunicodechar{⊂}{{\fallbackfont\upshape ⊂}}
+\newunicodechar{ŷ}{{\fallbackfont\upshape ŷ}}

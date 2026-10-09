@@ -1,0 +1,20 @@
+title: "Подготовка к защите"
+subtitle: "Шпаргалка к защите и сценарий презентации на 5 минут. ML-часть проекта: прогноз входов на станции 1 линии метро СПб"
+author: "Команда проекта, ML-часть"
+date: "Октябрь 2026"
+lang: ru
+documentclass: article
+papersize: a4
+fontsize: 11pt
+geometry: "top=2cm, bottom=2.2cm, left=2.2cm, right=2cm"
+mainfont: "PT Serif"
+sansfont: "PT Sans"
+monofont: "PT Mono"
+linestretch: 1.05
+toc: true
+toc-depth: 2
+toc-title: "Содержание"
+colorlinks: true
+linkcolor: "black"
+urlcolor: "blue"
+toccolor: "black"

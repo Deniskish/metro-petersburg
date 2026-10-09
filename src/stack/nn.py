@@ -26,7 +26,7 @@
   Затем дообучение на всём окне с тем же числом эпох, стандартизация — по всему окну (как число деревьев у LightGBM).
 - seed 0, 1, 2, z усредняются: среднее упорядоченных троек упорядочено.
 - CPU, torch.use_deterministic_algorithms, один поток. Один поток нужен потому, что в одном процессе с lightgbm две
-  копии libomp и многопоточный torch падает (см. src/nn_model.py). При тех же данных и seed прогнозы совпадают побитово.
+  копии libomp и многопоточный torch падает. При тех же данных и seed прогнозы совпадают побитово.
 """
 import copy
 import json
@@ -240,8 +240,10 @@ class GRUQuantile:
         return self
 
     def predict(self, s: Samples) -> np.ndarray:
-        """z [N, 4, 3] — среднее по seed."""
+        """z [N, 4, 3] — среднее по seed. Один поток и в прогнозе: загруженная сеть в одном процессе с lightgbm
+        иначе зависает (две копии libomp)."""
         import torch
+        torch.set_num_threads(self.params["threads"])
         x, codes = self._tensors(s, self.scaler, with_target=False)
         out = []
         with torch.no_grad():

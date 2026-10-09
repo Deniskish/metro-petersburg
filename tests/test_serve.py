@@ -14,6 +14,11 @@ from src import model as M
 from src import serve as S
 
 
+def test_default_model_is_stack():
+    import inspect
+    assert inspect.signature(S.forecast).parameters["model"].default == "stack"
+
+
 def test_origin_hour_closes_at_59():
     assert S.origin("2026-08-31 08:59") == pd.Timestamp("2026-08-31 08:00")
     assert S.origin("2026-08-31 08:30") == pd.Timestamp("2026-08-31 07:00")
@@ -96,15 +101,15 @@ def _future_garbage(d: E.SpbData, now: str) -> E.SpbData:
 
 @pytest.mark.parametrize("now", ["2026-08-31 08:59", "2026-07-08 13:59"])
 def test_forecast_does_not_see_after_now(spb, tiny, now):
-    full = S.forecast(now, models_dir=tiny, data=spb)
-    alt = S.forecast(now, models_dir=tiny, data=_future_garbage(spb, now))
+    full = S.forecast(now, model="lgbm", models_dir=tiny, data=spb)
+    alt = S.forecast(now, model="lgbm", models_dir=tiny, data=_future_garbage(spb, now))
     assert full.records == alt.records
     assert full.explanations == alt.explanations
     assert full.meta == alt.meta
 
 
 def test_forecast_passes_contract(spb, tiny):
-    fc = S.forecast("2026-08-31 08:59", models_dir=tiny, data=spb)
+    fc = S.forecast("2026-08-31 08:59", model="lgbm", models_dir=tiny, data=spb)
     preds = contract.validate_records(fc.records)
     assert len(preds) == 18 * 2
     assert {p.horizon_min for p in preds} == {60, 120}
@@ -137,11 +142,11 @@ def _yandex_hours(now) -> pd.DatetimeIndex:
 
 @pytest.fixture(scope="module")
 def om_fc(spb, tiny):
-    return S.forecast(NOW, models_dir=tiny, data=spb, weather_source="openmeteo")
+    return S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb, weather_source="openmeteo")
 
 
 def test_weather_auto_for_past_is_openmeteo(spb, tiny, om_fc):
-    auto = S.forecast(NOW, models_dir=tiny, data=spb)
+    auto = S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb)
     assert auto.records == om_fc.records and auto.explanations == om_fc.explanations
     assert auto.meta["weather"]["requested"] == "auto" and auto.meta["weather"]["source"] == "openmeteo"
     assert set(auto.meta["weather"]["hours"].values()) == {"openmeteo"} and auto.meta["weather"]["warning"] is None
@@ -151,7 +156,7 @@ def test_yandex_with_openmeteo_values_gives_same_forecast(spb, tiny, om_fc):
     """Яндекс с теми же осадками, что у Open-Meteo, — тот же прогноз: погода идёт в модель тем же путём."""
     om = spb.forecast.set_index("ts_utc").precipitation
     fake = FakeYandex({t: float(om[t + A.YANDEX_TO_OPENMETEO]) for t in _yandex_hours(NOW)})
-    fc = S.forecast(NOW, models_dir=tiny, data=spb, weather_source="yandex", weather_provider=fake)
+    fc = S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb, weather_source="yandex", weather_provider=fake)
     assert fc.records == om_fc.records
     assert fc.meta["weather"]["source"] == "yandex" and fc.meta["weather"]["warning"] is None
     assert fc.meta["weather"]["features"] == om_fc.meta["weather"]["features"]
@@ -162,7 +167,7 @@ def test_yandex_rain_reaches_model_features(spb, tiny, om_fc):
     """Демо-дождь external_data (1,2 мм) в час t0: признак слота t0 + 1 — дождь, сумма за 3 ч у обоих слотов."""
     hours = _yandex_hours(NOW)
     precip = {t: 1.2 if t == hours[2] else 0.0 for t in hours}
-    fc = S.forecast(NOW, models_dir=tiny, data=spb, weather_source="yandex", weather_provider=FakeYandex(precip))
+    fc = S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb, weather_source="yandex", weather_provider=FakeYandex(precip))
     feats = fc.meta["weather"]["features"]
     assert [f["fc_precip_tau"] for f in feats] == [1.0, 0.0]
     assert [f["fc_precip_3h_tau"] for f in feats] == pytest.approx([1.2, 1.2])
@@ -177,11 +182,11 @@ def test_yandex_rain_reaches_model_features(spb, tiny, om_fc):
 def test_yandex_without_key_falls_back_to_openmeteo(spb, tiny, om_fc, monkeypatch):
     monkeypatch.delenv(A.WEATHER_KEY_ENV, raising=False)
     monkeypatch.delenv(A.RASP_KEY_ENV, raising=False)
-    fc = S.forecast(NOW, models_dir=tiny, data=spb, weather_source="yandex")
+    fc = S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb, weather_source="yandex")
     assert fc.records == om_fc.records
     assert fc.meta["weather"]["source"] == "openmeteo" and A.WEATHER_KEY_ENV in fc.meta["weather"]["warning"]
     monkeypatch.setattr(S, "_wall_clock", lambda: pd.Timestamp(NOW))          # «сейчас» = now
-    live = S.forecast(NOW, models_dir=tiny, data=spb)
+    live = S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb)
     assert live.records == om_fc.records
     assert live.meta["weather"]["requested"] == "auto" and A.WEATHER_KEY_ENV in live.meta["weather"]["warning"]
 
@@ -192,7 +197,7 @@ def test_railway_context_in_explanations(spb, tiny, om_fc):
     arrivals = {(h.rasp_station_code, day): [RailwayArrival(arrival_time="2026-08-31T09:20:00+03:00",
                                                             transport_type="suburban", station_code=h.rasp_station_code)]
                 for h in A.hubs_by_station().values()}
-    fc = S.forecast(NOW, models_dir=tiny, data=spb, railway_provider=FakeRailwayProvider(arrivals))
+    fc = S.forecast(NOW, model="lgbm", models_dir=tiny, data=spb, railway_provider=FakeRailwayProvider(arrivals))
     assert fc.records == om_fc.records
     assert all(set(e["context"]) == {"railway", "events"} for e in fc.explanations)
     with_rail = {(e["station_id"], e["ts"]): e["context"]["railway"] for e in fc.explanations if e["context"]["railway"]}
