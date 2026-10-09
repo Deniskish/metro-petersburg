@@ -8,6 +8,8 @@
                                         # он не является; демо-вечер; data/predictions/stack_sep.json по контракту
   python -m src.stack --figures         # графики reports/figures/spb_17_*
   python -m src.stack --tables          # производные таблицы (by_minute) из кэша прогнозов, без переобучения
+  python -m src.stack --train-final     # GRU на всех 15-минутных данных → models/stack_gru_final (для «сейчас» в serve,
+                                        # когда нет GRU, обученной до момента прогноза; веса стекинга не меняются)
 
 --reuse берёт прогнозы GRU из кэша data/interim/stack_preds/, если ключ (параметры, окно, код) совпал.
 
@@ -166,6 +168,16 @@ def run_september(force: bool = False) -> None:
     log(f"контракт: {n_ok} записей; демо — {day:%d.%m}, {station}")
 
 
+def run_train_final() -> None:
+    """GRU на всех 15-минутных данных (февраль, май, июль, сентябрь) → models/stack_gru_final. Как lgbm_final:
+    serve берёт её, только если нет GRU, обученной не позже чем за 7 суток до момента прогноза."""
+    sd = D.build()
+    m = NN.GRUQuantile(len(sd.q.vestibules)).fit(NN.samples(sd.q, sd.rows))
+    path = M.MODELS / "stack_gru_final"
+    m.save(path)
+    log(f"{path.relative_to(config.ROOT)}: обучение {m.info['train_start']} – {m.info['train_end']}, эпохи {m.info['epochs']}")
+
+
 def run_tables() -> None:
     """Производные таблицы из сохранённых прогнозов (data/interim/stack_preds): модели не обучаются, параметры
     и прогон сентября не повторяются."""
@@ -181,6 +193,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--september", action="store_true", help="проверка на сентябре (один раз)")
     ap.add_argument("--figures", action="store_true", help="графики spb_17_*")
     ap.add_argument("--tables", action="store_true", help="производные таблицы из кэша прогнозов")
+    ap.add_argument("--train-final", action="store_true", help="GRU на всех 15-минутных данных → models/stack_gru_final")
     ap.add_argument("--reuse", action="store_true", help="прогнозы GRU из кэша")
     args = ap.parse_args(argv)
     pd.set_option("display.width", 220)
@@ -188,6 +201,8 @@ def main(argv: list[str] | None = None) -> None:
         run_fit(args.reuse)
     if args.september:
         run_september()
+    if args.train_final:
+        run_train_final()
     if args.tables:
         run_tables()
     if args.figures:

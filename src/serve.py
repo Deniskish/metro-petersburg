@@ -4,8 +4,15 @@
   python -m src.serve --train                         # замороженная конфигурация на всех данных до 29.09 → models/lgbm_final/
   python -m src.serve --train --holdout               # то же по 24.08 → models/lgbm_holdout/ (модель финального теста
                                                       # без повторного теста: те же данные — те же деревья)
-  python -m src.serve --now "2026-08-31 08:59"        # прогноз на t+1 и t+2 по данным до now
+  python -m src.serve --now "2026-07-08 13:59"        # стекинг (по умолчанию): 4 получасовых слота, горизонты 30–120
+  python -m src.serve --now "2026-08-31 08:59" --model lgbm   # часовая LightGBM: t+1 и t+2 по данным до now
   python -m src.serve --now "2026-06-27 20:59" --model auto --json out.json
+
+**Модель (model).** "stack" (по умолчанию) — стекинг этапа 7 (src/stack/forecast.py): часовая LightGBM, персистентность
+и GRU по 15-минутным данным, веса — reports/stack/stack_params.json; записи — получасовые слоты, горизонты 30/60/90/120.
+Если стекинга для момента нет (нет 15-минутных данных: они есть за февраль, май, июль, сентябрь; ночь; необычные сутки;
+нет файлов стекинга), прогноз делает часовая LightGBM, а в meta["fallback"] — причина. "lgbm" (или прежнее "auto") —
+часовая LightGBM; имя папки в models/ — явный выбор бандла LightGBM.
 
 forecast(now) берёт только данные до конца часа t0 = floor(now + 1 мин) − 1 ч (час hh считается закрытым в hh:59):
 поток после t0 становится NaN, флаги инцидента после t0 снимаются, нормы и признаки пересчитываются заново.
@@ -121,10 +128,35 @@ def _weather_features(rows: pd.DataFrame) -> list[dict]:
             for tau, p, p3 in zip(w.tau, w.fc_precip_tau, w.fc_precip_3h_tau)]
 
 
-def forecast(now, model: str = "auto", models_dir: Path = M.MODELS, data: E.SpbData | None = None,
+MODELS = ("stack", "lgbm")
+
+
+def forecast(now, model: str = "stack", models_dir: Path = M.MODELS, data: E.SpbData | None = None,
              weather_source: str = "auto", weather_provider=None, railway_provider=None,
-             events: list[A.LocatedEvent] | None = None) -> Forecast:
-    """Прогноз по контракту на 18 станций, горизонты 60 и 120 мин, и топ-3 причины — по данным только до now.
+             events: list[A.LocatedEvent] | None = None, hours: pd.DataFrame | None = None) -> Forecast:
+    """Прогноз по контракту и топ-3 причины — по данным только до now.
+
+    model: "stack" (по умолчанию) — стекинг, получасовые слоты и горизонты 30/60/90/120; нет стекинга для этого момента —
+    часовая LightGBM с причиной в meta["fallback"]. "lgbm" / "auto" — часовая LightGBM, горизонты 60 и 120;
+    имя папки в models/ — этот бандл LightGBM. hours — 15-минутная таблица часов (intrahour.load_hours) вместо файла
+    (тесты подают сюда обрезанные данные)."""
+    if model == "stack":
+        from src.stack import forecast as SF
+        try:
+            return SF.forecast(now, models_dir, data, hours, weather_source, weather_provider, railway_provider, events)
+        except SF.Unavailable as e:
+            fc = _forecast_lgbm(now, "auto", models_dir, data, weather_source, weather_provider, railway_provider, events)
+            fc.meta.update({"requested_model": "stack", "fallback": {"from": "stack", "reason": str(e)}})
+            return fc
+    return _forecast_lgbm(now, "auto" if model == "lgbm" else model, models_dir, data, weather_source,
+                          weather_provider, railway_provider, events)
+
+
+def _forecast_lgbm(now, model: str = "auto", models_dir: Path = M.MODELS, data: E.SpbData | None = None,
+                   weather_source: str = "auto", weather_provider=None, railway_provider=None,
+                   events: list[A.LocatedEvent] | None = None) -> Forecast:
+    """Часовая LightGBM: прогноз по контракту на 18 станций, горизонты 60 и 120 мин, и топ-3 причины — по данным
+    только до now.
 
     weather_source: auto | openmeteo | yandex (см. описание модуля); weather_provider — объект с get_hourly_forecast
     вместо YandexWeatherProvider. railway_provider (get_arrivals) и events (A.locate_events) — контекст для LLM-слоя;
@@ -149,7 +181,8 @@ def forecast(now, model: str = "auto", models_dir: Path = M.MODELS, data: E.SpbD
     records, expl, _ = M.station_forecast(m, st_q, rows, panel, meta["anomaly_rule"],
                                           f"{meta['model_version']}/{name}")
     context = A.add_context(expl, railway_provider, events, live)
-    info = {"model": name, "model_version": meta["model_version"], "train_start": meta["train_start"],
+    info = {"model": name, "requested_model": "lgbm", "model_version": meta["model_version"],
+            "train_start": meta["train_start"],
             "train_end": meta["train_end"], "out_of_sample": oos, "warning": warning,
             "now": str(_local(now)), "t0": t0.tz_localize(config.SPB_TZ).isoformat(),
             "config_sha256": meta.get("config_sha256"),
@@ -193,8 +226,16 @@ def _header(fc: Forecast) -> str:
     t0 = pd.Timestamp(m["t0"])
     w = m["weather"]
     weather = {"openmeteo": "Open-Meteo", "yandex": "Яндекс", "yandex+openmeteo": "Яндекс и Open-Meteo"}[w["source"]]
+    if m["model"] == "stack":
+        base = ", ".join(f"{b['name']} {b.get('bundle', b['kind'])} ({b['weights']['q50']['30']:.2f} в q50 на 30 мин)"
+                         for b in m["base_models"])
+        model = f"стекинг {m['model_version']}: {base}; слоты по 30 мин, горизонты 30–120"
+        if m["out_of_sample"] and m["warning"]:
+            oos = f"базовые модели вне выборки; {m['warning']}"
+    else:
+        model = m["model"] + (f" — запасная, стекинг недоступен: {m['fallback']['reason']}" if m.get("fallback") else "")
     return (f"Прогноз по данным до {m['now']} (последний закрытый час — {t0:%d.%m %H}:00)\n"
-            f"Модель: {m['model']} (обучена {span}), {oos}\n"
+            f"Модель: {model} (обучена {span}), {oos}\n"
             f"Погода: {weather}" + (f"\nПредупреждение: {w['warning']}" if w["warning"] else ""))
 
 
@@ -203,7 +244,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--train", action="store_true", help="обучить финальную модель на всех данных до 29.09")
     ap.add_argument("--holdout", action="store_true", help="с --train: обучение по 24.08 → models/lgbm_holdout/")
     ap.add_argument("--now", help="момент прогноза, местное время: «2026-08-31 08:59»")
-    ap.add_argument("--model", default="auto", help="auto (по умолчанию) или имя папки в models/")
+    ap.add_argument("--model", default="stack",
+                    help="stack (по умолчанию), lgbm (часовая LightGBM; то же — auto) или имя папки LightGBM в models/")
     ap.add_argument("--weather", default="auto", choices=WEATHER_SOURCES,
                     help="погода: auto (по умолчанию: «сейчас» — Яндекс, прошлое — Open-Meteo), openmeteo, yandex")
     ap.add_argument("--stations", help="станции через запятую (для печати)")

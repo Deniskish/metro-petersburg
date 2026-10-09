@@ -103,14 +103,20 @@ python -m src.clean_spb                              # → data/interim/
 python -m src.model --save-folds        # models/lgbm_fold_2026-05 … 2026-08: обучение до начала каждого месяца
 python -m src.serve --train --holdout   # models/lgbm_holdout: обучение по 24.08 (та же модель, что в финальном тесте)
 python -m src.serve --train             # models/lgbm_final: все данные по 29.09
+python -m src.stack --fit               # стекинг: GRU stack_gru_2026-05/07 и веса (веса уже в reports/stack/, ~2 мин)
+python -m src.stack --train-final       # models/stack_gru_final: GRU на всех 15-минутных данных (для «сейчас»)
 ```
+
+GRU для сентября (`models/stack_gru_2026-09`) сохраняется единственным прогоном `python -m src.stack --september`,
+который уже проведён и повторно не запускается.
 
 Сам финальный тест (`python -m src.model --final`) уже проведён и повторно не запускается.
 
 #### 3. Прогноз
 
 ```bash
-python -m src.serve --now "2026-08-31 08:59"
+python -m src.serve --now "2026-07-08 13:59"                 # стекинг (по умолчанию): 4 получасовых слота
+python -m src.serve --now "2026-08-31 08:59" --model lgbm    # часовая LightGBM: слоты 09:00 и 10:00
 python -m src.serve --now "2026-08-31 08:59" --stations devyatkino,narvskaya --json forecast.json
 ```
 
@@ -119,12 +125,63 @@ python -m src.serve --now "2026-08-31 08:59" --stations devyatkino,narvskaya --j
 ```python
 from src import serve
 
-fc = serve.forecast("2026-08-31 08:59")     # данные только до now; модель выбирается автоматически
-fc.records        # прогноз по контракту: 18 станций × горизонты 60 и 120 мин
-fc.explanations   # топ-3 причины на каждую запись
-fc.meta           # какая модель, до какой даты обучена, вне выборки ли прогноз
+fc = serve.forecast("2026-07-08 13:59")     # данные только до now; модели выбираются автоматически
+fc.records        # прогноз по контракту: стекинг — 18 станций × слоты 30 мин × горизонты 30/60/90/120
+fc.explanations   # топ-3 причины на каждую запись (у стекинга — от часовой LightGBM на час слота)
+fc.meta           # какая модель, базовые модели и их веса, до какой даты обучены, вне выборки ли прогноз
 serve.table(fc)   # всё одной таблицей
+
+serve.forecast("2026-08-31 08:59", model="lgbm")   # часовая LightGBM, как раньше: горизонты 60 и 120 мин
 ```
+
+**Какая модель отвечает.** По умолчанию `model="stack"` — стекинг этапа 7 ([docs/stack_findings.md](docs/stack_findings.md),
+раздел 9): часовая LightGBM, персистентность и GRU по 15-минутным данным, веса — `reports/stack/stack_params.json`.
+Записи стекинга — **получасовые слоты** (`meta["slot_minutes"] = 30`), горизонты 30/60/90/120 мин.
+
+Если стекинга для момента нет, отвечает часовая LightGBM (часовые слоты, горизонты 60 и 120), а причина — в
+`meta["fallback"]`. Это бывает:
+
+- нет 15-минутных данных: они есть только за февраль, май, июль и сентябрь, живого потока нет;
+- момент или слоты вне 06–00;
+- праздник или день события;
+- нет файлов стекинга.
+
+Перед использованием смотрите `meta["model"]`: `"stack"` или имя бандла LightGBM.
+
+#### Как получить ансамбль у себя без переобучения
+
+Ансамбль (стекинг) — это код в git и веса моделей вне git. Одних весов мало: признаки, нормы, 15-минутные окна для GRU
+и смешивание моделей считает код из `src/`.
+
+| Что | Где | Как получить |
+|---|---|---|
+| Код ансамбля и прогноза | `src/stack/`, `src/serve.py` | `git pull` ветки `makar/ml` |
+| Веса смешивания (мета-модель) | `reports/stack/stack_params.json` | в git, вместе с кодом |
+| Веса базовых моделей: LightGBM `lgbm_*`, GRU `stack_gru_*` | `models/` (около 21 МБ) | архивом от ML-части, распаковать в корень репозитория |
+| Данные | `data/interim/*.parquet` | архивом от ML-части или собрать из файлов организаторов |
+
+1. **Код:** `git pull`, затем `pip install -r requirements.txt` (Python 3.12).
+2. **Веса.** Распаковать архив так, чтобы получилось `models/lgbm_holdout/…`, `models/stack_gru_2026-07/…` и так далее.
+3. **Данные — одно из двух:**
+   - положить в `data/interim/` присланные файлы: `spb_line1_hourly.parquet`, `spb_line1_15min.parquet`,
+     `spb_line1_15min_reconciliation.parquet`, `calendar_ru_2026.parquet`, `weather_archive_spb.parquet`,
+     `weather_hist_forecast_spb.parquet`;
+   - или положить файлы организаторов в `data/raw/spb/` и собрать сами:
+     ```bash
+     python -m src.download --only weather_spb calendar
+     python -m src.clean_spb && python -m src.clean_spb_15min
+     ```
+4. **Проверка:**
+   ```bash
+   python -m src.serve --now "2026-07-08 13:59"   # «Модель: стекинг …», 4 получасовых слота
+   pytest -q tests/test_stack_serve.py            # тесты ансамбля в serve
+   ```
+
+Пути к данным и моделям код берёт сам (`src/config.py`), ничего настраивать не нужно. Если архива с весами нет,
+их можно собрать заново: `python -m src.model --save-folds`, `python -m src.serve --train --holdout`,
+`python -m src.serve --train`, `python -m src.stack --fit`, `python -m src.stack --train-final`.
+GRU для сентября (`stack_gru_2026-09`) пересобирается только единственным прогоном `--september`, который уже проведён.
+Поэтому её лучше брать из архива.
 
 **Момент прогноза.** Час hh считается закрытым в hh:59. `now = 08:59` — это данные по 08 ч включительно и слоты 09:00
 (горизонт 60 мин) и 10:00 (120 мин). Поток после этого часа не используется — это проверяет тест.
