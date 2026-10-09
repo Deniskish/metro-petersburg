@@ -155,12 +155,13 @@ serve.forecast("2026-08-31 08:59", model="lgbm")   # часовая LightGBM, к
 
 | Что | Где | Как получить |
 |---|---|---|
-| Код ансамбля и прогноза | `src/stack/`, `src/serve.py` | `git pull` ветки `makar/ml` |
+| Код ансамбля и прогноза | `src/stack/`, `src/serve.py` | ветка `main`: `git clone` или `git pull` |
 | Веса смешивания (мета-модель) | `reports/stack/stack_params.json` | в git, вместе с кодом |
 | Веса базовых моделей: LightGBM `lgbm_*`, GRU `stack_gru_*` | `models/` (около 21 МБ) | архивом от ML-части, распаковать в корень репозитория |
 | Данные | `data/interim/*.parquet` | архивом от ML-части или собрать из файлов организаторов |
 
-1. **Код:** `git pull`, затем `pip install -r requirements.txt` (Python 3.12).
+1. **Код:** `git clone https://github.com/Deniskish/metro-petersburg.git` (или `git pull` в ветке `main`), затем
+   `pip install -r requirements.txt` (Python 3.12).
 2. **Веса.** Распаковать архив так, чтобы получилось `models/lgbm_holdout/…`, `models/stack_gru_2026-07/…` и так далее.
 3. **Данные — одно из двух:**
    - положить в `data/interim/` присланные файлы: `spb_line1_hourly.parquet`, `spb_line1_15min.parquet`,
